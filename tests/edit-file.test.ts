@@ -121,4 +121,30 @@ describe("edit_file", () => {
       "line1\r\nchanged\r\nline3\r\n",
     );
   });
+
+  it("edits a mixed-line-ending file without touching other lines", async () => {
+    const { root, file } = await createWorkspaceWithFile(
+      "a\r\nb\r\nc\nd\n",
+    );
+
+    const tool = createEditFileTool(root);
+
+    // LF 区域：多行 oldText
+    await tool.execute("call-1", {
+      path: "a.ts",
+      oldText: "c\nd",
+      newText: "c\nX\nd",
+    });
+
+    // CRLF 区域：单行 oldText，插入的多行内容要跟随 CRLF
+    await tool.execute("call-2", {
+      path: "a.ts",
+      oldText: "a",
+      newText: "a\nA",
+    });
+
+    expect(await readFile(file, "utf8")).toBe(
+      "a\r\nA\r\nb\r\nc\nX\nd\n",
+    );
+  });
 });
