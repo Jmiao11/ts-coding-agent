@@ -1100,4 +1100,135 @@ it(
     expect(modelCalls).toHaveLength(2);
     expect(newMessages.at(-1)).toEqual(finalMessage);
   });
+
+  it("returns an error ToolResult when the model calls a missing tool and continues", async () => {
+    const prompt: UserMessage = {
+      role: "user",
+      content: "现在几点？",
+      timestamp: 1,
+    };
+
+    const toolCallMessage: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-missing",
+          name: "get_time",
+          arguments: {},
+        },
+      ],
+      provider: "fakes",
+      model: "fakes-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+
+    const finalMessage: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "抱歉，我暂时无法查询时间。",
+        },
+      ],
+      provider: "fakes",
+      model: "fakes-model",
+      stopReason: "stop",
+      timestamp: 3,
+    };
+
+    const modelCalls: Message[][] = [];
+
+    const streamFn: StreamFn = (_model, context) => {
+      modelCalls.push([...context.messages]);
+
+      const message =
+        modelCalls.length === 1
+          ? toolCallMessage
+          : finalMessage;
+
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "start", partial: message });
+      stream.push({
+        type: "done",
+        reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+        message,
+      });
+      stream.end();
+      return stream;
+    };
+
+    const config: AgentLoopConfig = {
+      model: {
+        id: "fakes-model",
+        provider: "fakes",
+        name: "Fake Model",
+        contextWindow: 1000,
+        maxTokens: 100,
+      },
+      convertToLlm(messages) {
+        return [...messages];
+      },
+    };
+
+    /*
+     * context.tools 是空的，
+     * 所以模型调用的 get_time 并不存在。
+     */
+    const context: AgentContext = {
+      messages: [],
+      tools: [],
+    };
+
+    const newMessages = await runAgentLoop(
+      [prompt],
+      context,
+      config,
+      undefined,
+      streamFn,
+      () => {},
+    );
+
+    /*
+     * 1. 第一次模型调用返回 ToolCall，
+     *    第二次模型调用看到错误 ToolResult 后给出最终回答。
+     */
+    expect(modelCalls).toHaveLength(2);
+
+    expect(
+      modelCalls[1]?.map((message) => message.role),
+    ).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+
+    /*
+     * 2. 不存在的 Tool 要产生 isError 为 true 的 ToolResult，
+     *    内容里包含 "Tool not found"。
+     */
+    const toolResult = newMessages.find(
+      (message) => message.role === "toolResult",
+    );
+
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-missing",
+      toolName: "get_time",
+      isError: true,
+    });
+
+    expect(toolResult?.content).toMatchObject([
+      {
+        type: "text",
+        text: "Tool not found: get_time",
+      },
+    ]);
+
+    /*
+     * 3. Agent Loop 没有中断，最终拿到了模型的回答。
+     */
+    expect(newMessages.at(-1)).toEqual(finalMessage);
+  });
 });
