@@ -20,6 +20,9 @@
   },
   "packageManager": "pnpm@12.5.1",
   "type": "module",
+  "bin": {
+    "agent-harness": "dist/cli.js"
+  },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
