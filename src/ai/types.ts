@@ -28,6 +28,17 @@ export type UserMessage = {
 };
 
 
+export type Usage = {
+  /** 本次请求的输入 token，约等于整个 Context 的大小 */
+  input: number;
+
+  output: number;
+
+  /** 输入中命中 Provider 前缀缓存的部分（Provider 返回了才有） */
+  cacheRead?: number;
+};
+
+
 export type AssistantMessage = {
   role: "assistant";
   content: Array<TextContent | ToolCall>;
@@ -43,6 +54,12 @@ export type AssistantMessage = {
     | "aborted";
 
   errorMessage?: string;
+
+  /**
+   * Provider 返回了用量才有；
+   * Fake 消息和错误消息没有。
+   */
+  usage?: Usage;
 
   timestamp: number;
 };

@@ -46,12 +46,23 @@ export function createLoggerExtension(
       turnIndex,
       message,
     }) {
+      const usage = message.usage;
+
       log(
         [
           `[model end]`,
           `call=${callId}`,
           `turn=${turnIndex}`,
           `stopReason=${message.stopReason}`,
+          ...(usage
+            ? [
+                `in=${usage.input}`,
+                ...(usage.cacheRead !== undefined
+                  ? [`cached=${usage.cacheRead}`]
+                  : []),
+                `out=${usage.output}`,
+              ]
+            : []),
         ].join(" "),
       );
     },

@@ -12,6 +12,7 @@ import type {
   TextContent,
   Tool,
   ToolCall,
+  Usage,
 } from "../types.js";
 
 
@@ -375,6 +376,7 @@ export function createOpenAICompatibleStreamFn(
        * "你好"
        */
       let fullText = "";
+      let usage: Usage | undefined;
 
       type PendingToolCall = {
         id?: string;
@@ -418,6 +420,10 @@ export function createOpenAICompatibleStreamFn(
             : {}),
 
             stream: true,
+            // 让 Provider 在流的最后一个 chunk 里返回 usage
+            stream_options: {
+              include_usage: true,
+            },
           }),
         };
 
@@ -499,6 +505,13 @@ export function createOpenAICompatibleStreamFn(
 
           if (data === undefined) {
             continue;
+          }
+
+          const chunkUsage =
+            extractOpenAIUsage(data);
+
+          if (chunkUsage) {
+            usage = chunkUsage;
           }
 
 
@@ -599,6 +612,10 @@ export function createOpenAICompatibleStreamFn(
                 toolCalls,
               );
 
+              if (usage) {
+                message.usage = usage;
+              }
+
 
               stream.push({
                 type: "done",
@@ -634,6 +651,10 @@ export function createOpenAICompatibleStreamFn(
           undefined,
           toolCalls,
         );
+
+        if (usage) {
+          message.usage = usage;
+        }
 
         stream.push({
           type: "done",
@@ -1239,6 +1260,70 @@ export function parseOpenAIStreamData(
     type: "text_delta",
     delta: content,
   };
+}
+
+
+type OpenAIUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+
+  // OpenAI 的写法
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
+
+  // DeepSeek 的写法
+  prompt_cache_hit_tokens?: number;
+};
+
+
+/**
+ * 单独提取 usage，不改动 parseOpenAIStreamData：
+ * usage chunk 的 choices 通常是空数组，会被那边当成 ignore。
+ */
+export function extractOpenAIUsage(
+  data: string,
+): Usage | undefined {
+  if (data === "[DONE]") {
+    return undefined;
+  }
+
+  let chunk: {
+    usage?: OpenAIUsage | null;
+  };
+
+  try {
+    chunk = JSON.parse(data) as {
+      usage?: OpenAIUsage | null;
+    };
+  } catch {
+    return undefined;
+  }
+
+  const raw = chunk.usage;
+
+  if (
+    !raw
+    || typeof raw.prompt_tokens !== "number"
+    || typeof raw.completion_tokens !== "number"
+  ) {
+    return undefined;
+  }
+
+  const usage: Usage = {
+    input: raw.prompt_tokens,
+    output: raw.completion_tokens,
+  };
+
+  const cached =
+    raw.prompt_tokens_details?.cached_tokens
+    ?? raw.prompt_cache_hit_tokens;
+
+  if (typeof cached === "number") {
+    usage.cacheRead = cached;
+  }
+
+  return usage;
 }
 
 

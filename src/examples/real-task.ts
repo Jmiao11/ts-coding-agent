@@ -151,6 +151,10 @@ const agent = new Agent({
 
 const executedTools: string[] = [];
 let modelCallCount = 0;
+let totalInput = 0;
+let totalCached = 0;
+let totalOutput = 0;
+let peakInput = 0;
 
 agent.subscribe((event) => {
   if (event.type === "tool_execution_start") {
@@ -178,6 +182,15 @@ agent.subscribe((event) => {
     && event.message.role === "assistant"
   ) {
     modelCallCount += 1;
+
+    const usage = event.message.usage;
+
+    if (usage) {
+      totalInput += usage.input;
+      totalCached += usage.cacheRead ?? 0;
+      totalOutput += usage.output;
+      peakInput = Math.max(peakInput, usage.input);
+    }
 
     const text = event.message.content
       .filter(
@@ -213,6 +226,20 @@ try {
 
 console.log("\n模型调用次数：", modelCallCount);
 console.log("执行过的工具：", executedTools);
+if (totalInput === 0) {
+  console.log("Token 用量：Provider 没有返回 usage");
+} else {
+  console.log("Token 用量：", {
+    input: totalInput,
+    cachedInput: totalCached,
+    output: totalOutput,
+
+    // 最大一次输入 ≈ 本次任务 Context 的峰值
+    peakInput,
+    peakOfContextWindow:
+      `${((peakInput / agent.state.model.contextWindow) * 100).toFixed(1)}%`,
+  });
+}
 console.log(
   "\n请人工检查：git diff，然后自己运行 pnpm test。",
 );

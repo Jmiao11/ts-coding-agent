@@ -949,4 +949,57 @@ describe("createOpenAICompatibleStreamFn", () => {
   });
 });
 
+  it("reads token usage from the final usage chunk", async () => {
+    const encoder = new TextEncoder();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const data of [
+          '{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}',
+          '{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":1000}}}',
+          "[DONE]",
+        ]) {
+          controller.enqueue(
+            encoder.encode(`data: ${data}\n\n`),
+          );
+        }
+
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const stream = await streamFn(model, context, undefined);
+
+    let done: AssistantMessage | undefined;
+
+    for await (const event of stream) {
+      if (event.type === "done") {
+        done = event.message;
+      }
+    }
+
+    expect(done?.usage).toEqual({
+      input: 1200,
+      output: 30,
+      cacheRead: 1000,
+    });
+
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { stream_options?: unknown };
+
+    expect(requestBody.stream_options).toEqual({
+      include_usage: true,
+    });
+  });
+
 });
