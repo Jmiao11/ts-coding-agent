@@ -1,0 +1,30 @@
+//tsconfig.json→ TypeScript 怎么检查/编译代码
+{
+  "compilerOptions": {
+    "target": "ES2022",
+
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "noEmit": true,
+
+  },
+  // noEmit只检查，不生成 JS。
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}
