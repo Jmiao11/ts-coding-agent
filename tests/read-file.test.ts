@@ -175,4 +175,44 @@ describe("read_file", () => {
       );
     },
   );
+
+  it(
+    "refuses to read .env but allows .env.example",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      await writeFile(
+        join(tempDirectory, ".env"),
+        "AGENT_API_KEY=secret",
+        "utf8",
+      );
+
+      await writeFile(
+        join(tempDirectory, ".env.example"),
+        "AGENT_API_KEY=",
+        "utf8",
+      );
+
+      const tool =
+        createReadFileTool(tempDirectory);
+
+      await expect(
+        tool.execute("call-1", { path: ".env" }),
+      ).rejects.toThrow("may contain secrets");
+
+      // 绕一圈也不行
+      await expect(
+        tool.execute("call-2", { path: "./sub/../.env" }),
+      ).rejects.toThrow("may contain secrets");
+
+      const example = await tool.execute("call-3", {
+        path: ".env.example",
+      });
+
+      expect(example.content[0]?.text).toBe("AGENT_API_KEY=");
+    },
+  );
 });

@@ -9,6 +9,7 @@ import type {
 } from "../agent/types.js";
 
 import {
+  assertNotSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
@@ -99,6 +100,8 @@ export function createReadFileTool(
           `Path is not a file: ${parameters.path}`,
         );
       }
+
+      assertNotSecretFile(relativePath);
 
       const buffer =
         await readFile(absolutePath);

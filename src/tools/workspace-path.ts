@@ -63,3 +63,30 @@ export function resolveWorkspacePath(
         : relativePath.split(sep).join("/"),
   };
 }
+
+/**
+ * .env / .env.local / .env.production 等可能含 Key；
+ * .env.example / .sample / .template 是模板，不算。
+ */
+export function isSecretFile(
+  relativePath: string,
+): boolean {
+  const name =
+    relativePath.split("/").at(-1) ?? "";
+
+  return (
+    /^\.env(\..+)?$/.test(name)
+    && !/\.(example|sample|template)$/.test(name)
+  );
+}
+
+
+export function assertNotSecretFile(
+  relativePath: string,
+): void {
+  if (isSecretFile(relativePath)) {
+    throw new Error(
+      `Access to ${relativePath} is blocked because it may contain secrets. Do not try to read it another way (for example with run_command); if you need a value from it, ask the user.`,
+    );
+  }
+}

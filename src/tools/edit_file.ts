@@ -10,6 +10,7 @@ import type {
 } from "../agent/types.js";
 
 import {
+  assertNotSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
@@ -131,6 +132,8 @@ export function createEditFileTool(
           `Path is not a file: ${parameters.path}`,
         );
       }
+
+      assertNotSecretFile(relativePath);
 
       const content =
         await readFile(absolutePath, "utf8");

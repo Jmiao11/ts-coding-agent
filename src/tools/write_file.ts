@@ -8,6 +8,7 @@ import Type from "typebox";
 
 import type { AgentTool } from "../agent/types.js";
 import {
+  assertNotSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
@@ -59,6 +60,8 @@ export function createWriteFileTool(
           `Path is not a file: ${parameters.path}`,
         );
       }
+
+      assertNotSecretFile(relativePath);
 
       let created = false;
 

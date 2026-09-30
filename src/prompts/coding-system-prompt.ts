@@ -42,6 +42,12 @@ export function createCodingSystemPrompt(
     // 观察：叙述用英文，结论用中文
     "- Always reply in the same language the user used.",
 
+    // 观察（README 任务）：为验证文档，在 workspace 外做了全局安装
+    "- Stay inside the workspace: do not install packages globally, change system settings, or create files outside the workspace unless the task asks for it.",
+
+    // 观察（README 任务）：读取了 .env
+    "- Never read or print secret files such as .env. If you need a value from one, ask the user.",
+
    // 预防（真实项目）：改动由用户用 git diff 审查
    "- Do not run git commands that change history, branches or remotes (commit, push, reset, checkout, rebase, clean). The user reviews your changes with git diff.",
 

@@ -157,7 +157,7 @@ export function createRunCommandTool(
     label: "Run Command",
 
     description:
-      `Run a shell command in the workspace root and return its combined stdout/stderr and exit code. Use it to run tests, builds, git and other CLI tools. The shell is ${SHELL_NAME}. Commands cannot read interactive input. Long output is truncated to the last ${MAX_OUTPUT_LINES} lines.`,
+      `Run a shell command in the workspace root and return its combined stdout/stderr and exit code. Use it to run tests, builds, git and other CLI tools. The shell is ${SHELL_NAME}. stdout and stderr are already combined, so do not add 2>&1, 2>nul or pipes to pagers like more. Run one command per call instead of chaining commands with & or &&. Commands cannot read interactive input. Long output is truncated to the last ${MAX_OUTPUT_LINES} lines.`,
 
     parameters:
       runCommandParameters,

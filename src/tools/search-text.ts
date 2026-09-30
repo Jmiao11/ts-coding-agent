@@ -15,6 +15,8 @@ import type {
 } from "../agent/types.js";
 
 import {
+  assertNotSecretFile,
+  isSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
@@ -127,6 +129,10 @@ async function* walkFiles(
         yield* walkFiles(absolutePath, relativePath);
       }
     } else if (entry.isFile()) {
+      if (isSecretFile(entry.name)) {
+        continue;
+      }
+
       yield {
         absolutePath,
         relativePath,
@@ -166,6 +172,8 @@ export function createSearchTextTool(
         workspaceRoot,
         parameters.path ?? ".",
       );
+
+      assertNotSecretFile(relativePath);
 
       let matcher: RegExp;
 
