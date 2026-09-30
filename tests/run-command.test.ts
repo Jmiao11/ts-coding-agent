@@ -20,6 +20,7 @@ import {
 
 import {
   createRunCommandTool,
+  decodeOutput,
   truncateTail,
 } from "../src/tools/run-command.js";
 
@@ -117,6 +118,29 @@ describe("run_command", () => {
 
       expect(result.details.timedOut).toBe(true);
       expect(result.content[0]?.text).toContain("timed out");
+    },
+  );
+});
+
+
+describe("decodeOutput", () => {
+  it.runIf(process.platform === "win32")(
+    "decodes UTF-8 and GBK lines in the same output",
+    () => {
+      // "找不到文件" 的 GBK 编码：就是之前乱码 "�Ҳ����ļ�" 的原始字节
+      const gbk = Buffer.from([
+        0xd5, 0xd2, 0xb2, 0xbb, 0xb5, 0xbd, 0xce, 0xc4, 0xbc, 0xfe,
+      ]);
+
+      const output = Buffer.concat([
+        Buffer.from("✓ F:/学习资料\r\n", "utf8"),
+        gbk,
+        Buffer.from("\r\n"),
+      ]);
+
+      expect(decodeOutput(output)).toBe(
+        "✓ F:/学习资料\r\n找不到文件\r\n",
+      );
     },
   );
 });

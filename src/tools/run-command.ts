@@ -21,8 +21,8 @@ const MAX_TIMEOUT_SECONDS = 600;
 const MAX_OUTPUT_LINES = 200;
 const MAX_OUTPUT_CHARS = 20_000;
 
-// 内存里最多保留的尾部，防止刷屏命令撑爆内存
-const MAX_BUFFERED_CHARS = 200_000;
+// 内存里最多保留的尾部字节数，防止刷屏命令撑爆内存
+const MAX_BUFFERED_BYTES = 400_000;
 
 const SHELL_NAME =
   process.platform === "win32"
@@ -89,6 +89,63 @@ export function truncateTail(
     text: result,
     truncated: result.length < text.length,
   };
+}
+
+
+function createFallbackDecoder(): TextDecoder {
+  if (process.platform === "win32") {
+    try {
+      // 中文 Windows 控制台代码页（936）
+      return new TextDecoder("gbk");
+    } catch {
+      // Node 没带完整 ICU 时不支持 gbk
+    }
+  }
+
+  // 非严格模式：解不了的字节变成 �，不会抛错
+  return new TextDecoder("utf-8");
+}
+
+
+/**
+ * 按行解码：每行先严格按 UTF-8 解码，失败再用回退编码。
+ *
+ * 按行而不是整段判断：同一次命令的输出可能混着
+ * UTF-8（node、git）和 GBK（cmd 自带命令）。
+ * "\n"（0x0A）在 UTF-8 和 GBK 里都不会出现在多字节字符内部，
+ * 所以按字节切行是安全的。
+ */
+export function decodeOutput(
+  buffer: Buffer,
+): string {
+  const utf8 = new TextDecoder("utf-8", {
+    fatal: true,
+  });
+
+  const fallback = createFallbackDecoder();
+  const lines: string[] = [];
+
+  let start = 0;
+
+  while (start <= buffer.length) {
+    let end = buffer.indexOf(0x0a, start);
+
+    if (end === -1) {
+      end = buffer.length;
+    }
+
+    const line = buffer.subarray(start, end);
+
+    try {
+      lines.push(utf8.decode(line));
+    } catch {
+      lines.push(fallback.decode(line));
+    }
+
+    start = end + 1;
+  }
+
+  return lines.join("\n");
 }
 
 
@@ -187,23 +244,35 @@ export function createRunCommandTool(
       );
       // [标准输入 stdin, 标准输出 stdout, 错误输出 stderr]
 
-      let output = "";
-      let totalChars = 0;
+      /*
+       * 收原始字节，最后统一解码：
+       * setEncoding("utf8") 会在解码时就把 GBK 变成乱码。
+       */
+      const chunks: Buffer[] = [];
+      let bufferedBytes = 0;
+      let totalBytes = 0;
 
-      const append = (chunk: string): void => {
-        totalChars += chunk.length;
-        output += chunk;
+      const append = (chunk: Buffer): void => {
+        chunks.push(chunk);
+        bufferedBytes += chunk.length;
+        totalBytes += chunk.length;
 
-        if (output.length > MAX_BUFFERED_CHARS) {
-          output = output.slice(-MAX_BUFFERED_CHARS);
+        // 只保留尾部：从头部整块丢弃
+        while (
+          bufferedBytes > MAX_BUFFERED_BYTES
+          && chunks.length > 1
+        ) {
+          const dropped = chunks.shift();
+
+          if (!dropped) {
+            break;
+          }
+
+          bufferedBytes -= dropped.length;
         }
       };
 
-      // setEncoding：跨 chunk 的 UTF-8 多字节字符不会被切坏
-      child.stdout?.setEncoding("utf8");
       child.stdout?.on("data", append);
-      // 只要命令产生正常输出，就调用 append 函数。
-      child.stderr?.setEncoding("utf8");
       child.stderr?.on("data", append);
 
       let timedOut = false;
@@ -247,15 +316,28 @@ export function createRunCommandTool(
         );
       }
 
+      const buffered = Buffer.concat(chunks);
+      const droppedHead = totalBytes > buffered.length;
+
+      // 头部被丢过的话，第一行可能是半行（甚至半个字符），整行丢掉
+      let raw = buffered;
+
+      if (droppedHead) {
+        const firstNewline = buffered.indexOf(0x0a);
+
+        if (firstNewline !== -1) {
+          raw = buffered.subarray(firstNewline + 1);
+        }
+      }
+
       const tail = truncateTail(
-        output.replace(/\r\n/g, "\n"),
+        decodeOutput(raw).replace(/\r\n/g, "\n"),
         MAX_OUTPUT_LINES,
         MAX_OUTPUT_CHARS,
       );
 
       const truncated =
-        tail.truncated
-        || totalChars > output.length;
+        tail.truncated || droppedHead;
 
       const parts = [`$ ${parameters.command}`];
 
