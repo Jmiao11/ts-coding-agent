@@ -97,6 +97,36 @@ function lineEndingAt(
 }
 
 
+/** 替换区域前后各展示多少行上下文 */
+const CONTEXT_LINES = 3;
+
+/** 返回给模型的片段字符上限，超出时截断并注明 */
+export const MAX_SNIPPET_CHARS = 2000;
+
+
+/**
+ * 按行切分，兼容 CRLF：每行末尾的 "\r" 去掉，
+ * 末尾换行不算一行（和 read_file 的处理保持一致）。
+ */
+function splitLines(
+  text: string,
+): string[] {
+  const lines = text
+    .split("\n")
+    .map((line) =>
+      line.endsWith("\r")
+        ? line.slice(0, -1)
+        : line,
+    );
+
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  return lines;
+}
+
+
 export function createEditFileTool(
   workspaceRoot: string,
 ): AgentTool<
@@ -203,11 +233,50 @@ export function createEditFileTool(
       const line =
         content.slice(0, match.index).split("\n").length;
 
+      /*
+       * 回显修改后的区域（含前后各 CONTEXT_LINES 行），
+       * 让模型能确认改对了，不必再读一遍文件。
+       * 逐行不加行号前缀，避免模型把行号当成文件内容复制。
+       */
+      const lines = splitLines(updated);
+      const totalLines = lines.length;
+
+      const endLine =
+        updated
+          .slice(0, match.index + replacement.length)
+          .split("\n").length;
+
+      const fromLine = Math.max(1, line - CONTEXT_LINES);
+      const toLine = Math.min(
+        totalLines,
+        endLine + CONTEXT_LINES,
+      );
+
+      const snippetLines =
+        lines.slice(fromLine - 1, toLine);
+
+      let snippet = snippetLines.join("\n");
+      let truncated = false;
+
+      if (snippet.length > MAX_SNIPPET_CHARS) {
+        snippet = snippet.slice(0, MAX_SNIPPET_CHARS);
+        truncated = true;
+      }
+
+      const header =
+        `[lines ${fromLine}-${toLine} of ${totalLines}]`;
+
+      const suffix = truncated
+        ? `\n… [snippet truncated to ${MAX_SNIPPET_CHARS} characters]`
+        : "";
+
       return {
         content: [
           {
             type: "text",
-            text: `Edited ${relativePath} at line ${line}.`,
+            text:
+              `Edited ${relativePath} at line ${line}.\n\n`
+              + `${header}\n${snippet}${suffix}`,
           },
         ],
 

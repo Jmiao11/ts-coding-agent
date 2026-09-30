@@ -22,6 +22,7 @@ import {
 
 import {
   createEditFileTool,
+  MAX_SNIPPET_CHARS,
 } from "../src/tools/edit-file.js";
 
 
@@ -146,5 +147,159 @@ describe("edit_file", () => {
     expect(await readFile(file, "utf8")).toBe(
       "a\r\nA\r\nb\r\nc\nX\nd\n",
     );
+  });
+
+
+  it("reports the edited region with three lines of context and no line-number prefixes", async () => {
+    const { root } = await createWorkspaceWithFile(
+      [
+        "l1",
+        "l2",
+        "l3",
+        "l4",
+        "l5",
+        "l6",
+        "l7",
+        "l8",
+        "l9",
+        "l10",
+        "",
+      ].join("\n"),
+    );
+
+    const tool = createEditFileTool(root);
+
+    const result = await tool.execute("call-1", {
+      path: "a.ts",
+      oldText: "l5",
+      newText: "L5",
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text:
+        "Edited a.ts at line 5.\n\n"
+        + "[lines 2-8 of 10]\n"
+        + [
+          "l2",
+          "l3",
+          "l4",
+          "L5",
+          "l6",
+          "l7",
+          "l8",
+        ].join("\n"),
+    });
+  });
+
+
+  it("splits the snippet on CRLF without leaking carriage returns", async () => {
+    const { root } = await createWorkspaceWithFile(
+      "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\n",
+    );
+
+    const tool = createEditFileTool(root);
+
+    const result = await tool.execute("call-1", {
+      path: "a.ts",
+      oldText: "l3",
+      newText: "L3",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text:
+        "Edited a.ts at line 3.\n\n"
+        + "[lines 1-5 of 5]\n"
+        + [
+          "l1",
+          "l2",
+          "L3",
+          "l4",
+          "l5",
+        ].join("\n"),
+    });
+
+    expect(result.content[0]?.text).not.toContain("\r");
+  });
+
+
+  it("includes every line of a multi-line replacement plus context", async () => {
+    const { root } = await createWorkspaceWithFile(
+      [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m6",
+        "m7",
+        "m8",
+        "m9",
+        "m10",
+        "m11",
+        "m12",
+        "",
+      ].join("\n"),
+    );
+
+    const tool = createEditFileTool(root);
+
+    const result = await tool.execute("call-1", {
+      path: "a.ts",
+      oldText: "m4\nm5",
+      newText: "M4\nM5\nM6",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text:
+        "Edited a.ts at line 4.\n\n"
+        + "[lines 1-9 of 13]\n"
+        + [
+          "m1",
+          "m2",
+          "m3",
+          "M4",
+          "M5",
+          "M6",
+          "m6",
+          "m7",
+          "m8",
+        ].join("\n"),
+    });
+  });
+
+
+  it("truncates an overlong snippet and says so", async () => {
+    const { root } = await createWorkspaceWithFile(
+      "a\nb\nc\n",
+    );
+
+    const tool = createEditFileTool(root);
+
+    const result = await tool.execute("call-1", {
+      path: "a.ts",
+      oldText: "b",
+      newText: "x".repeat(MAX_SNIPPET_CHARS + 500),
+    });
+
+    const expectedSnippet = (
+      "a\n"
+      + "x".repeat(MAX_SNIPPET_CHARS + 500)
+      + "\nc"
+    ).slice(0, MAX_SNIPPET_CHARS);
+
+    expect(expectedSnippet).toHaveLength(MAX_SNIPPET_CHARS);
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text:
+        "Edited a.ts at line 2.\n\n"
+        + "[lines 1-3 of 3]\n"
+        + expectedSnippet
+        + `\n… [snippet truncated to ${MAX_SNIPPET_CHARS} characters]`,
+    });
   });
 });
