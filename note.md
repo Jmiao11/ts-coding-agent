@@ -2730,3 +2730,291 @@ function getCatClass(): typeof Cat {
 ```
 
 因此，`SimpleAssistantMessageEventStream` 在当前代码里是**返回对象的类型**，不是“类本身”。
+
+
+本项目的 **Hook + Extension 机制，本质上是给 Agent Loop 安装可插拔的控制器**。
+
+Agent Loop 负责正常工作，Hook 定义可以介入的时机，Extension 实现具体功能，ExtensionHost 负责组织并执行这些功能。
+
+## 一、先理解四个核心组件
+
+| 组件 | 文件 | 作用 |
+|---|---|---|
+| Hook | `agent/hooks.ts` | 定义生命周期中的介入时机 |
+| Extension | `agent/extension.ts` | 实现某些 Hook 的具体功能 |
+| ExtensionHost | `agent/extension-host.ts` | 注册、管理并依次调用 Extension |
+| Agent Loop | `agent/agent-loop.ts` | 主动触发生命周期 Hook |
+
+它们之间的关系是：
+
+```text
+                 Agent Loop
+                     │
+              触发生命周期
+                     ↓
+                    Hook
+                     │
+                     ↓
+               ExtensionHost
+                     │
+          ┌──────────┼──────────┐
+          ↓          ↓          ↓
+        Budget    Approval    Logger
+```
+
+注意：Hook 是接口定义，不是独立运行的程序。实际调用发生在 Agent Loop 中。:chatgpt-content-reference{index="0"}
+
+## 二、Hook 在什么时候执行？
+
+你的项目定义了以下生命周期 Hook：
+
+| Hook | 触发时间 | 典型用途 |
+|---|---|---|
+| `onTurnStart` | 每轮开始 | 初始化本轮记录 |
+| `beforeModelCall` | 调用模型之前 | 检查模型调用预算 |
+| `afterModelCall` | 模型返回之后 | 记录 Token Usage |
+| `beforeToolCall` | 执行工具之前 | 预算检查、人工审批 |
+| `afterToolCall` | 工具执行之后 | 记录成功或失败 |
+| `onTurnEnd` | 每轮结束 | 完成本轮统计 |
+| `onRunEnd` | 整个任务结束 | 汇总任务状态 |
+
+这些 Hook 不需要模型主动调用，是 Agent Loop 在执行过程中自动触发的。
+
+例如：
+
+```text
+用户：运行 pnpm test
+        │
+        ▼
+    onTurnStart
+        │
+        ▼
+  beforeModelCall
+        │
+        ▼
+    DeepSeek
+        │
+        ▼
+  afterModelCall
+        │
+        ▼
+模型要求 run_command
+        │
+        ▼
+  beforeToolCall
+        │
+        ▼
+     执行工具
+        │
+        ▼
+   afterToolCall
+        │
+        ▼
+     onTurnEnd
+        │
+        ▼
+工具结果进入 Context
+        │
+        ▼
+     下一轮模型调用
+```
+
+如果模型已经给出最终回答，就结束循环，最后触发 `onRunEnd`。
+
+## 三、Extension 是怎样注册的？
+
+看你项目里的 CLI：
+
+```ts
+extensions: [
+  createBudgetExtension({
+    maxModelCalls: 30,
+    maxToolCalls: 50,
+  }),
+
+  createCommandApprovalExtension({
+    approve: askInTerminal,
+  }),
+
+  createLoggerExtension(),
+],
+```
+
+这实际上创建了三个 Extension 对象，然后把它们交给 Agent Loop。:chatgpt-content-reference{index="1"}
+
+每个 Extension 都有相同的基本结构：
+
+```ts
+type AgentExtension = {
+  name: string;
+  hooks: AgentLoopHooks;
+};
+```
+
+但不要求实现所有 Hook。
+
+例如，Budget 只需要关心：
+
+```ts
+{
+  name: "budget",
+
+  hooks: {
+    beforeModelCall() {
+      // 检查模型调用次数
+    },
+
+    beforeToolCall() {
+      // 检查工具调用次数
+    },
+  },
+}
+```
+
+Logger 则可以实现多个 Hook，在任务执行期间持续打印日志。
+
+因此，添加新功能通常不需要修改 Agent Loop，只需要创建新的 Extension 并注册。
+
+## 四、ExtensionHost 如何运行它们？
+
+这是整个架构的关键。
+
+假设模型准备调用：
+
+```ts
+run_command("pnpm test");
+```
+
+Agent Loop 会先执行：
+
+```ts
+const blocked =
+  await extensionHost.beforeToolCall({
+    turnIndex,
+    toolCall,
+  });
+```
+
+而 ExtensionHost 内部的逻辑可以简化为：
+
+```ts
+async function beforeToolCall(input) {
+  for (const extension of extensions) {
+    const result =
+      await extension.hooks.beforeToolCall?.(input);
+
+    if (result?.block === true) {
+      return result;
+    }
+  }
+
+  return undefined;
+}
+```
+
+这意味着三个 Extension **按照注册顺序执行**，而不是并行执行。
+
+你的项目就是：
+
+```text
+beforeToolCall
+      │
+      ▼
+    Budget
+      │
+      ▼
+Command Approval
+      │
+      ▼
+    Logger
+      │
+      ▼
+   真正执行工具
+```
+
+只要某个 Extension 返回 `{ block: true, reason }`，ExtensionHost 就立即停止后续检查。Agent Loop 不执行这个工具，而是把拒绝原因转换成错误 ToolResult，交还模型。:chatgpt-content-reference{index="2"} :chatgpt-content-reference{index="3"}
+
+## 五、结合你的真实运行理解
+
+你之前运行：
+
+```powershell
+agent-harness "运行 node --version 告诉我版本"
+```
+
+执行过程是：
+
+```text
+1. DeepSeek 产生 ToolCall
+   run_command("node --version")
+
+2. Budget 检查
+   没有超限，放行
+
+3. Command Approval 检查
+   不属于白名单
+
+4. 终端询问
+   允许吗？[y/N]
+
+5. 你输入 n
+   返回 block=true
+
+6. ExtensionHost 立即结束检查
+
+7. run_command 不执行
+
+8. 生成错误 ToolResult
+
+9. DeepSeek 根据拒绝结果重新回答
+```
+
+所以你看到：
+
+```text
+执行过的工具：[]
+```
+
+并不是模型没有申请调用工具，而是**模型申请了，但工具执行前被 Hook 拦截了**。
+
+另外，被阻止的调用不会触发 `afterToolCall`；由于当前 Logger 注册在审批 Extension 后面，它也不会收到此次调用的 `beforeToolCall`。这是注册顺序直接产生的效果。:chatgpt-content-reference{index="4"}
+
+还有一个值得注意的细节：目前 Budget 注册在 Approval 前面。如果 Budget 在 `beforeToolCall` 放行时立即增加计数，那么随后被人工拒绝的命令也会消耗一次工具预算。以后若希望预算只统计实际执行的工具，需要调整这一机制。
+
+## 六、Hook 和 Event 有什么区别？
+
+你的项目还有：
+
+```ts
+agent.subscribe((event) => {
+  // ...
+});
+```
+
+它和 Hook 不完全相同。
+
+**Hook 是执行流程中的介入点。** 它可以异步等待、检查条件，必要时阻止操作。
+
+**Event 是发生事情之后发出的通知。** 外部订阅者可以据此更新界面、输出日志或收集统计，但现有订阅接口不承担工具执行前的拦截职责。
+
+例如：
+
+```text
+beforeToolCall Hook
+    ↓
+审批通过
+    ↓
+tool_execution_start Event
+    ↓
+真正执行工具
+    ↓
+tool_execution_end Event
+    ↓
+afterToolCall Hook
+```
+
+两者不能完全替代。
+
+**最终记住：Agent Loop 控制主流程，Hook 提供介入时机，Extension 实现附加能力，ExtensionHost 负责依次调度。**
+
+这套设计的价值是以后加入 Context 管理、Trace 或其他功能时，可以优先考虑利用生命周期扩展，而不用不断往 Agent Loop 里增加专门的判断逻辑。

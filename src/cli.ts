@@ -80,6 +80,10 @@ import {
   createWriteFileTool,
 } from "./tools/write-file.js";
 
+import {
+  estimateContextTokens,
+} from "./context/token-estimate.js";
+
 
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
@@ -308,6 +312,17 @@ const agent = new Agent({
   loopConfig: {
     convertToLlm(messages) {
       return [...messages];
+    },
+
+    // C1：只测量不修改。打印在 [model start] 之前，和随后 [model end] 的 in= 对照
+    async transformContext(messages) {
+      const estimate = estimateContextTokens(messages);
+
+      console.log(
+        `[context] est=${estimate.tokens} (usage=${estimate.usageTokens} + trailing=${estimate.trailingTokens})`,
+      );
+
+      return messages;
     },
 
     extensions: [
