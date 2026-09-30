@@ -48,7 +48,7 @@ export function resolveWorkspacePath(
         && "code" in error
         && error.code === "ENOENT"
       ) {
-        break; // write_file.ts 可创建后续尚不存在的目录。
+        break; // write-file.ts 可创建后续尚不存在的目录。
       }
 
       throw error;

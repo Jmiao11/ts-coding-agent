@@ -22,7 +22,7 @@ import {
 
 import {
   createEditFileTool,
-} from "../src/tools/edit_file.js";
+} from "../src/tools/edit-file.js";
 
 
 let tempDirectory:

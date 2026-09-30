@@ -58,7 +58,7 @@ import {
 
 import {
   createEditFileTool,
-} from "./tools/edit_file.js";
+} from "./tools/edit-file.js";
 
 import {
   createListDirectoryTool,
@@ -78,7 +78,7 @@ import {
 
 import {
   createWriteFileTool,
-} from "./tools/write_file.js";
+} from "./tools/write-file.js";
 
 
 const DEFAULT_ENV_FILE =
@@ -118,9 +118,11 @@ function parseCliArgs() {
       workspace: { type: "string", short: "w" },
       model: { type: "string", short: "m" },
       "env-file": { type: "string" },
+      // 选项名里有连字符，所以必须加引号
     },
   });
 }
+// positionals 放"没名字的普通参数"。
 
 let args: ReturnType<typeof parseCliArgs>;
 
@@ -232,6 +234,9 @@ function handleInterrupt(): void {
 }
 
 process.on("SIGINT", handleInterrupt);
+// 当前进程收到 SIGINT
+// ↓
+// 调用 handleInterrupt
 
 
 // ---------- 命令确认 ----------

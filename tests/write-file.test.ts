@@ -18,7 +18,7 @@ import {
 
 import {
   createWriteFileTool,
-} from "../src/tools/write_file.js";
+} from "../src/tools/write-file.js";
 
 let root: string | undefined;
 

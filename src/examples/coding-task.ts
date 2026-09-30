@@ -37,7 +37,7 @@ import {
 
 import {
   createEditFileTool,
-} from "../tools/edit_file.js";
+} from "../tools/edit-file.js";
 
 import {
   createListDirectoryTool,
@@ -57,7 +57,7 @@ import {
 
 import {
   createWriteFileTool,
-} from "../tools/write_file.js";
+} from "../tools/write-file.js";
 
 import {
   createCodingSystemPrompt,
