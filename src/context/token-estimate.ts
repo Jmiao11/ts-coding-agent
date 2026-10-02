@@ -32,7 +32,7 @@ export function estimateTextTokens(
 }
 
 
-function textOf(
+export function textOf(
   content: string | TextContent[],
 ): string {
   return typeof content === "string"

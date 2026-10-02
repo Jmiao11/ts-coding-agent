@@ -3018,3 +3018,182 @@ afterToolCall Hook
 **最终记住：Agent Loop 控制主流程，Hook 提供介入时机，Extension 实现附加能力，ExtensionHost 负责依次调度。**
 
 这套设计的价值是以后加入 Context 管理、Trace 或其他功能时，可以优先考虑利用生命周期扩展，而不用不断往 Agent Loop 里增加专门的判断逻辑。
+
+
+
+对，**C1 本质上就是“估算当前 Context 大小”**，不是精确 tokenizer 计数。
+
+而且这不是你这个项目特有的做法，**很多 Agent/Context 管理系统都会采用“真实 usage + 本地估算”的混合方式**。
+
+Pi 就是这样：先找最近一条带有效 `usage` 的 assistant 消息，把 Provider 已经返回的真实 token 数作为基准；再对这之后新增、尚未经过下一次模型调用的消息做本地估算。[GitHub](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts?utm_source=chatgpt.com)
+
+可以理解成：
+
+```text
+上一次模型调用
+Provider 已经告诉我：当时 Context ≈ 20,000 token
+                ↓
+之后又新增：
+ToolResult
+Assistant ToolCall
+ToolResult
+                ↓
+这些还没有新的真实 usage
+                ↓
+只能自己估算，比如 + 1,500
+                ↓
+当前 Context ≈ 21,500
+```
+
+### 为什么不全部精确算？
+
+因为你有两个时间点。
+
+**调用模型之后**，Provider 能告诉你真实 usage：
+
+```text
+input = 20300
+output = 180
+```
+
+这时候不需要猜。
+
+但 Agent 执行工具以后：
+
+```text
+模型调用
+↓
+tool call
+↓
+读取一个 500 行文件
+↓
+ToolResult 加入 Context
+↓
+准备下一次模型调用
+```
+
+在“准备下一次调用”的这个瞬间，Provider 还没见过新的 ToolResult，自然也还没有新的真实 `input_tokens`。
+
+可 Agent 必须**在调用模型之前**判断：
+
+```text
+现在是不是快爆 Context Window 了？
+要不要先 Compaction？
+```
+
+所以必须估算新增部分。
+
+---
+
+### 为什么不直接在本地用 tokenizer 精确计算？
+
+理论上可以，但现实中比较麻烦：
+
+不同模型 tokenizer 不一样，而且 Provider 还可能有额外的消息模板、工具 schema、thinking、缓存处理等开销。
+
+比如：
+
+```text
+DeepSeek tokenizer
+GPT tokenizer
+Claude tokenizer
+Qwen tokenizer
+```
+
+未必完全一样。
+
+而且真正发送的是：
+
+```text
+system prompt
+messages
+tool schemas
+role markers
+JSON serialization
+provider-specific template
+```
+
+你本地即使把“文本”精确 tokenize，也不一定和服务端最终计算完全一致。
+
+所以很多实现会选择：
+
+> **已有真实 usage 就信 Provider；没有真实 usage 的新增部分，用近似公式。**
+
+Pi 当前公开实现就是这个思路，并且其本地估算仍然是简单的字符启发式。[GitHub](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts?utm_source=chatgpt.com)
+
+---
+
+### 我们为什么还单独做 C1？
+
+因为我们不是单纯为了显示一个数字，而是后面要靠它决定：
+
+```text
+要不要 Compaction
+```
+
+假设：
+
+```text
+contextWindow = 128k
+reserve = 16k
+```
+
+那么：
+
+```text
+当前估算 > 112k
+→ 先不要继续请求模型
+→ 先压缩
+```
+
+所以 C1 实际上是 C3 的“传感器”。
+
+可以类比：
+
+```text
+C1 = 油量表
+C2 = 决定扔掉哪些行李
+C3 = 真正整理行李
+C4 = 上路测试
+```
+
+没有 C1，C3 就不知道什么时候该启动。
+
+---
+
+### 其他 Agent 一定都这样吗？
+
+不一定完全相同，公开实现大致有几类：
+
+| 做法 | 思路 |
+|---|---|
+| Provider usage + 本地估算 | Pi 这一类 |
+| 本地 tokenizer 计数 | 已知固定模型/tokenizer 时可做 |
+| 字符/经验公式估算 | 简单、快、跨 Provider |
+| 根本不主动算 | 等 Provider 报 context overflow 再处理 |
+| Provider 自带 context management | 把部分压缩/清理交给服务端 |
+
+所以 **“Context 要估算”很常见，但具体怎么算没有统一标准。**
+
+你现在这套更像：
+
+```text
+真实 usage 做锚点
++
+只估新增内容
+```
+
+比从头到尾全部 `字符数 ÷ 4` 更靠谱。
+
+另外你们还针对中文做了：
+
+```text
+ASCII ≈ chars / 4
+中文等非 ASCII ≈ 1 char / token
+```
+
+这属于针对你真实任务分布做的工程修正，后面再用 DeepSeek 的真实 `input` 校准即可。
+
+一句话：
+
+> **C1 不是为了精确算 token，而是为了在下一次模型调用之前，足够可靠地判断“Context 快满了吗”。**
