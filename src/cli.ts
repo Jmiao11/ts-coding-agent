@@ -392,8 +392,8 @@ const agent = new Agent({
 
     extensions: [
       createBudgetExtension({
-        maxModelCalls: 30,
-        maxToolCalls: 50,
+        maxModelCalls: 50,
+        maxToolCalls: 120,
       }),
       createCommandApprovalExtension({
         approve: askInTerminal,

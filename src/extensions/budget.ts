@@ -109,7 +109,7 @@ export function createBudgetExtension(
         return {
           block: true,
           reason:
-            `Budget exceeded: tool_calls limit is ${limits.maxToolCalls}.`,
+            `Budget exceeded: tool_calls limit is ${limits.maxToolCalls}. No more tool calls will run in this task; finish now with the information you already have.`,
         };
       }
 

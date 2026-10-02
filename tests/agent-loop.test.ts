@@ -1092,7 +1092,7 @@ it(
         isError: true,
         content: [{
           type: "text",
-          text: "Budget exceeded: tool_calls limit is 1.",
+          text: "Budget exceeded: tool_calls limit is 1. No more tool calls will run in this task; finish now with the information you already have.",
         }],
       },
     ]);

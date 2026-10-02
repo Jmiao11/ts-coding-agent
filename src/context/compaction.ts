@@ -276,17 +276,25 @@ const CHECKPOINT_SECTIONS = `## Goal
 ## Next Steps
 ## Critical Context`;
 
+// C4 真实运行发现的两个问题：
+// 1. 只记了"读过哪些文件"，没记"每个文件是做什么的"这类已得出的结论
+// 2. 把序列化时加的截断标记，误当成"文件没读完、需要补读"
+const CHECKPOINT_RULES = `Record findings and intermediate results the agent has already produced (for example, what each file it read does), not just which files were read: after this checkpoint the original tool outputs are no longer visible.
+Tool outputs inside <conversation> may be shortened for this summary request only (marked "[... N more characters truncated]"). Do not conclude from these markers that the agent saw incomplete content or needs to re-read a file.
+Keep exact file paths, function names, commands and error messages. The original request stays in the context verbatim, so do not copy it. Write in the same language as the original request.`;
+
 const SUMMARY_INSTRUCTIONS = `Write a structured checkpoint of the work in <conversation> that another model will use to continue the task. Use exactly these sections:
 
 ${CHECKPOINT_SECTIONS}
 
-Be concise. Keep exact file paths, function names, commands and error messages. The original request stays in the context verbatim, so do not copy it. Write in the same language as the original request.`;
+Be concise.
+${CHECKPOINT_RULES}`;
 
-const UPDATE_INSTRUCTIONS = `<conversation> contains NEW messages. Update the checkpoint in <previous-summary>: keep what is still relevant, add new progress and decisions, move finished items to Done, and refresh Next Steps. Use the same sections:
+const UPDATE_INSTRUCTIONS = `<conversation> contains NEW messages. Update the checkpoint in <previous-summary>: keep what is still relevant, add new progress, findings and decisions, move finished items to Done, and refresh Next Steps. Use the same sections:
 
 ${CHECKPOINT_SECTIONS}
 
-Keep exact file paths, function names, commands and error messages. The original request stays in the context verbatim, so do not copy it. Write in the same language as the original request.`;
+${CHECKPOINT_RULES}`;
 
 
 const READ_TOOLS = new Set(["read_file"]);

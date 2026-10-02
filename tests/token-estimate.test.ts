@@ -45,10 +45,10 @@ function toolResult(text: string): ToolResultMessage {
 
 
 describe("estimateTextTokens", () => {
-  it("counts ASCII by /4 and non-ASCII 1:1", () => {
-    expect(estimateTextTokens("abcdefgh")).toBe(2);
+  it("counts ASCII by /3 and non-ASCII 1:1", () => {
+    expect(estimateTextTokens("abcdefgh")).toBe(3);
     expect(estimateTextTokens("你好世界")).toBe(4);
-    expect(estimateTextTokens("abcd你好")).toBe(3);
+    expect(estimateTextTokens("abcd你好")).toBe(4);
   });
 });
 
@@ -63,10 +63,11 @@ describe("estimateContextTokens", () => {
       assistant(9999, 1, "error"),
     ];
 
+    // 最后一条可信的是 index 2：2000 + 80，之后 toolResult ≈ 14，错误消息 ≈ 1
     expect(estimateContextTokens(messages)).toEqual({
-      tokens: 2080 + 10 + 1,
+      tokens: 2080 + 14 + 1,
       usageTokens: 2080,
-      trailingTokens: 11,
+      trailingTokens: 15,
     });
 
     expect(

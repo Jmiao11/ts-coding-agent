@@ -70,6 +70,25 @@ describe("BudgetExtension", () => {
         modelCalls: 1,
         toolCalls: 0,
       });
+
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "call-1",
+        name: "read_file",
+        arguments: { path: "a.ts" },
+      };
+
+      expect(
+        await budget.hooks.beforeToolCall?.({ turnIndex: 0, toolCall }),
+      ).toBeUndefined();
+
+      expect(
+        await budget.hooks.beforeToolCall?.({ turnIndex: 1, toolCall }),
+      ).toEqual({
+        block: true,
+        reason:
+          "Budget exceeded: tool_calls limit is 1. No more tool calls will run in this task; finish now with the information you already have.",
+      });
     },
   );
 });

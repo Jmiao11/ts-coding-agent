@@ -11,7 +11,7 @@ import type {
  * 粗估一段文本的 token 数。
  *
  * Pi 用 chars/4，对英文偏保守；但中文大约一个字符就是一个 token，
- * chars/4 会严重低估。所以 ASCII 按 /4，非 ASCII 按 1:1。
+ * chars/4 会严重低估。所以 ASCII 按 /3，非 ASCII 按 1:1。
  * 准不准以真实 usage 校准为准。
  */
 export function estimateTextTokens(
@@ -28,7 +28,9 @@ export function estimateTextTokens(
     }
   }
 
-  return Math.ceil(ascii / 4) + other;
+  // C4 真实校准（DeepSeek）：代码类 ASCII 按 /4 会低估约 17%～22%，
+  // 改成 /3，略微偏高，阈值判断宁早勿晚
+  return Math.ceil(ascii / 3) + other;
 }
 
 
