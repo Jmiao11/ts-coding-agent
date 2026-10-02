@@ -81,8 +81,8 @@ import {
 } from "./tools/write-file.js";
 
 import {
-  estimateContextTokens,
-} from "./context/token-estimate.js";
+  createCompactor,
+} from "./context/compaction.js";
 
 
 const DEFAULT_ENV_FILE =
@@ -96,6 +96,7 @@ const HELP = `用法：agent-harness [选项] "任务描述"
   -w, --workspace <dir>   工作目录（默认：当前目录；必须在 Git 仓库里）
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
+      --context-window <n>  覆盖模型的上下文窗口（默认 128000；调小可用来测试压缩）
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
@@ -122,6 +123,7 @@ function parseCliArgs() {
       workspace: { type: "string", short: "w" },
       model: { type: "string", short: "m" },
       "env-file": { type: "string" },
+      "context-window": { type: "string" },
       // 选项名里有连字符，所以必须加引号
     },
   });
@@ -181,6 +183,24 @@ function requiredEnv(
 const apiKey = requiredEnv("AGENT_API_KEY");
 const baseUrl = requiredEnv("AGENT_BASE_URL");
 const modelId = values.model ?? requiredEnv("AGENT_MODEL");
+
+// 默认值仍是占位：DeepSeek 实际的上下文窗口还没确认
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+const contextWindow =
+  values["context-window"] === undefined
+    ? DEFAULT_CONTEXT_WINDOW
+    : Number(values["context-window"]);
+
+if (!Number.isInteger(contextWindow) || contextWindow < 8_000) {
+  fail("--context-window 必须是不小于 8000 的整数");
+}
+
+const compactionSettings = {
+  contextWindow,
+  reserveTokens: Math.min(16_384, Math.floor(contextWindow / 8)),
+  keepRecentTokens: Math.min(20_000, Math.floor(contextWindow / 4)),
+};
 
 
 // ---------- Workspace：必须在 Git 仓库里 ----------
@@ -286,15 +306,68 @@ async function askInTerminal(
 
 // ---------- Agent ----------
 
+// ---------- 模型与压缩 ----------
+
+const model = {
+  id: modelId,
+  provider: "openai-compatible",
+  name: modelId,
+  contextWindow,
+  maxTokens: 4096,
+};
+
+// 主任务和压缩总结用同一个 streamFn
+const streamFn = createOpenAICompatibleStreamFn({
+  apiKey,
+  baseUrl,
+});
+
+// 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
+let compactionCount = 0;
+let compactionInput = 0;
+let compactionOutput = 0;
+
+const compactor = createCompactor({
+  model,
+  streamFn,
+  settings: compactionSettings,
+
+  onEstimate(tokens, threshold) {
+    console.log(`[context] est=${tokens} threshold=${threshold}`);
+  },
+
+  onCompaction(event) {
+    compactionCount += 1;
+    compactionInput += event.usage?.input ?? 0;
+    compactionOutput += event.usage?.output ?? 0;
+
+    console.log(
+      [
+        `\n[compaction #${compactionCount}]`,
+        `est ${event.tokensBefore} → ~${event.estimatedTokensAfter}`,
+        `summarized=${event.summarizedMessages}`,
+        `kept=${event.keptMessages}`,
+        ...(event.usage
+          ? [`summary in=${event.usage.input} out=${event.usage.output}`]
+          : []),
+      ].join(" "),
+    );
+
+    console.log(
+      `----- summary -----\n${event.summary}\n-------------------\n`,
+    );
+  },
+
+  onError(error) {
+    console.error(
+      `\n[compaction failed] ${error instanceof Error ? error.message : String(error)}（本次不压缩，继续运行）\n`,
+    );
+  },
+});
+
 const agent = new Agent({
   initialState: {
-    model: {
-      id: modelId,
-      provider: "openai-compatible",
-      name: modelId,
-      contextWindow: 128_000,
-      maxTokens: 4096,
-    },
+    model,
 
     systemPrompt:
       createCodingSystemPrompt(workspaceRoot),
@@ -314,16 +387,8 @@ const agent = new Agent({
       return [...messages];
     },
 
-    // C1：只测量不修改。打印在 [model start] 之前，和随后 [model end] 的 in= 对照
-    async transformContext(messages) {
-      const estimate = estimateContextTokens(messages);
-
-      console.log(
-        `[context] est=${estimate.tokens} (usage=${estimate.usageTokens} + trailing=${estimate.trailingTokens})`,
-      );
-
-      return messages;
-    },
+    transformContext: (messages, signal) =>
+      compactor.transformContext(messages, signal),
 
     extensions: [
       createBudgetExtension({
@@ -337,10 +402,7 @@ const agent = new Agent({
     ],
   },
 
-  streamFn: createOpenAICompatibleStreamFn({
-    apiKey,
-    baseUrl,
-  }),
+  streamFn,
 });
 
 
@@ -404,6 +466,9 @@ agent.subscribe((event) => {
 
 console.log("workspace:", workspaceRoot);
 console.log("model:", modelId);
+console.log(
+  `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
+);
 console.log("task:", task, "\n");
 
 try {
@@ -424,11 +489,26 @@ console.log("\n模型调用次数：", modelCallCount);
 console.log("执行过的工具：", executedTools);
 
 if (totalInput > 0) {
-  console.log("Token 用量：", {
+  console.log("Token 用量（主任务）：", {
     input: totalInput,
     cachedInput: totalCached,
     output: totalOutput,
     peakInput,
+  });
+}
+
+if (compactionCount > 0) {
+  console.log("Token 用量（压缩）：", {
+    calls: compactionCount,
+    input: compactionInput,
+    output: compactionOutput,
+  });
+}
+
+if (totalInput > 0 || compactionCount > 0) {
+  console.log("Token 合计：", {
+    input: totalInput + compactionInput,
+    output: totalOutput + compactionOutput,
   });
 }
 

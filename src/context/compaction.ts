@@ -220,6 +220,8 @@ export type CompactionEvent = {
   estimatedTokensAfter: number;
   summarizedMessages: number;
   keptMessages: number;
+  /** 模型写的总结（不含文件列表） */
+  summary: string;
   usage?: Usage;
 };
 
@@ -228,6 +230,8 @@ export type CompactorOptions = {
   model: Model;
   streamFn: StreamFn;
   settings: CompactionSettings;
+  /** 每次调用模型前报告估算值，用来和随后真实的 in= 对照 */
+  onEstimate?: (tokens: number, threshold: number) => void;
   onCompaction?: (event: CompactionEvent) => void;
   onError?: (error: unknown) => void;
 };
@@ -520,7 +524,12 @@ export function createCompactor(
       const view = buildView(messages);
       const tokens = estimateCurrent(messages, view);
 
-      if (tokens <= settings.contextWindow - settings.reserveTokens) {
+      const threshold =
+        settings.contextWindow - settings.reserveTokens;
+
+      options.onEstimate?.(tokens, threshold);
+
+      if (tokens <= threshold) {
         return view;
       }
 
@@ -580,6 +589,7 @@ export function createCompactor(
         const newView = buildView(messages);
 
         options.onCompaction?.({
+          summary: result.text,
           tokensBefore: tokens,
           estimatedTokensAfter: sumTokens(newView),
           summarizedMessages: toSummarize.length,
