@@ -84,6 +84,11 @@ import {
   createCompactor,
 } from "./context/compaction.js";
 
+import {
+  createSessionWriter,
+  newSessionFile,
+} from "./session/session-store.js";
+
 
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
@@ -96,11 +101,12 @@ const HELP = `用法：agent-harness [选项] "任务描述"
   -w, --workspace <dir>   工作目录（默认：当前目录；必须在 Git 仓库里）
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
-      --context-window <n>  覆盖模型的上下文窗口（默认 128000；调小可用来测试压缩）
+      --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
+  可选：AGENT_THINKING=disabled（DeepSeek：显式关闭 thinking）
 
 运行中按 Ctrl+C 中止；再按一次强制退出。`;
 
@@ -184,7 +190,18 @@ const apiKey = requiredEnv("AGENT_API_KEY");
 const baseUrl = requiredEnv("AGENT_BASE_URL");
 const modelId = values.model ?? requiredEnv("AGENT_MODEL");
 
-// 默认值仍是占位：DeepSeek 实际的上下文窗口还没确认
+// DeepSeek 默认开启 thinking；开启时带 tools 的请求必须回传每轮的 reasoning_content，
+// 我们还不支持，所以目前只允许显式关闭。不设置就什么都不发（其他 Provider 可能不认识这个字段）。
+const thinking = process.env.AGENT_THINKING || undefined;
+
+if (thinking !== undefined && thinking !== "disabled") {
+  fail(
+    `AGENT_THINKING 目前只支持 disabled（收到：${thinking}）。开启 thinking 需要先支持回传 reasoning_content。`,
+  );
+}
+
+// 工作预算，不是模型上限：DeepSeek 的窗口是 1M，但 Context 越长越慢、越贵。
+// 估算超过 (这个值 - reserve) 就压缩。
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 const contextWindow =
@@ -237,6 +254,12 @@ if (gitStatus.stdout.trim().length > 0) {
     "⚠ 工作区有未提交的改动，建议先 commit，方便单独审查和回滚 Agent 的改动。\n",
   );
 }
+
+
+// ---------- Session ----------
+
+const session = newSessionFile(workspaceRoot);
+const sessionWriter = createSessionWriter(session);
 
 
 // ---------- Ctrl+C ----------
@@ -320,6 +343,9 @@ const model = {
 const streamFn = createOpenAICompatibleStreamFn({
   apiKey,
   baseUrl,
+  ...(thinking === "disabled"
+    ? { extraBody: { thinking: { type: "disabled" } } }
+    : {}),
 });
 
 // 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
@@ -416,7 +442,15 @@ let totalCached = 0;
 let totalOutput = 0;
 let peakInput = 0;
 
+
+
 agent.subscribe((event) => {
+
+  // 保存结束时的消息，不保存流式 partial。
+  if (event.type === "message_end") {
+    sessionWriter.appendMessage(event.message);
+  }
+
   if (event.type === "tool_execution_start") {
     executedTools.push(event.toolName);
   }
@@ -442,6 +476,11 @@ agent.subscribe((event) => {
     && event.message.role === "assistant"
   ) {
     modelCallCount += 1;
+
+    // Provider 错误（HTTP 400 等）的正文在 errorMessage 里，否则终端上看不到
+    if (event.message.errorMessage) {
+      console.error(`\n[model error] ${event.message.errorMessage}\n`);
+    }
 
     const usage = event.message.usage;
 
@@ -469,6 +508,7 @@ agent.subscribe((event) => {
 
 console.log("workspace:", workspaceRoot);
 console.log("model:", modelId);
+console.log("thinking:", thinking ?? "(provider default)");
 console.log(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
 );
@@ -515,6 +555,7 @@ if (totalInput > 0 || compactionCount > 0) {
   });
 }
 
+console.log(`\n会话记录：${session.path}`);
 console.log(
   "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
 );

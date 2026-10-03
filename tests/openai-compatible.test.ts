@@ -507,6 +507,45 @@ describe("parseOpenAIStreamData", () => {
 
 
 describe("createOpenAICompatibleStreamFn", () => {
+  it("merges extraBody into the request without overriding standard fields", async () => {
+    const encoder = new TextEncoder();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+      extraBody: {
+        thinking: { type: "disabled" },
+        model: "should-not-win",
+        stream: false,
+      },
+    });
+
+    const stream = await streamFn(model, context, undefined);
+
+    for await (const _event of stream) {
+      // 读完整个流
+    }
+
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as Record<string, unknown>;
+
+    expect(requestBody.thinking).toEqual({ type: "disabled" });
+    expect(requestBody.model).toBe("fake-model");
+    expect(requestBody.stream).toBe(true);
+  });
+
   it("reports length when the output is cut off, and sends max_tokens", async () => {
     const encoder = new TextEncoder();
 

@@ -46,6 +46,12 @@ export type OpenAICompatibleProviderConfig = {
    * 某些 Provider 可能需要额外 HTTP Header。
    */
   headers?: Record<string, string>;
+
+  /**
+   * 合并进请求体的额外字段（Provider 特有参数，例如 DeepSeek 的 thinking）。
+   * 标准字段（model、messages、stream 等）写在后面，不会被它覆盖。
+   */
+  extraBody?: Record<string, unknown>;
 };
 
 
@@ -410,6 +416,7 @@ export function createOpenAICompatibleStreamFn(
           },
 
           body: JSON.stringify({
+            ...(config.extraBody ?? {}),
             model: model.id,
             messages: toOpenAIMessages(context),
             ...(options?.tools?.length
