@@ -394,6 +394,7 @@ describe("createCompactor", () => {
     // 硬上限 = 0.8 × reserve(200)
     expect(maxTokensSeen).toEqual([160, 160]);
     expect(events).toHaveLength(1);
+    expect(events[0]?.attempts).toBe(2);
   });
 
 

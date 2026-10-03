@@ -228,6 +228,8 @@ export type CompactionEvent = {
   keptMessages: number;
   /** 模型写的总结（不含文件列表） */
   summary: string;
+  /** 总结请求次数：1 = 一次成功；2 = 第一次被截断，重试后成功 */
+  attempts: number;
   usage?: Usage;
 };
 
@@ -482,7 +484,7 @@ export function createCompactor(
     originalRequest: string | undefined,
     previousSummary: string | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<{ text: string; usage?: Usage }> {
+  ): Promise<{ text: string; attempts: number; usage?: Usage }> {
     const parts: string[] = [];
 
     if (originalRequest !== undefined) {
@@ -581,6 +583,7 @@ export function createCompactor(
 
       return {
         text,
+        attempts: attempt,
         ...(totalUsage ? { usage: totalUsage } : {}),
       };
     }
@@ -660,6 +663,7 @@ export function createCompactor(
 
         options.onCompaction?.({
           summary: result.text,
+          attempts: result.attempts,
           tokensBefore: tokens,
           estimatedTokensAfter: sumTokens(newView),
           summarizedMessages: toSummarize.length,

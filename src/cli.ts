@@ -350,6 +350,9 @@ const compactor = createCompactor({
         ...(event.usage
           ? [`summary in=${event.usage.input} out=${event.usage.output}`]
           : []),
+        ...(event.attempts > 1
+          ? [`attempts=${event.attempts}（首次被截断，in/out 含两次）`]
+          : []),
       ].join(" "),
     );
 
