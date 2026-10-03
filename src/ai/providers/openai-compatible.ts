@@ -377,6 +377,7 @@ export function createOpenAICompatibleStreamFn(
        */
       let fullText = "";
       let usage: Usage | undefined;
+      let finishReason: string | undefined;
 
       type PendingToolCall = {
         id?: string;
@@ -424,6 +425,9 @@ export function createOpenAICompatibleStreamFn(
             stream_options: {
               include_usage: true,
             },
+            ...(options?.maxTokens !== undefined
+              ? { max_tokens: options.maxTokens }
+              : {}),
           }),
         };
 
@@ -514,6 +518,12 @@ export function createOpenAICompatibleStreamFn(
             usage = chunkUsage;
           }
 
+          const chunkFinish = extractFinishReason(data);
+
+          if (chunkFinish) {
+            finishReason = chunkFinish;
+          }
+
 
           /**
            * 第三层：
@@ -602,7 +612,9 @@ export function createOpenAICompatibleStreamFn(
               const reason =
                 toolCalls.length > 0
                   ? "toolUse"
-                  : "stop";
+                  : finishReason === "length"
+                    ? "length"
+                    : "stop";
 
               const message = createAssistantMessage(
                 model,
@@ -642,7 +654,11 @@ export function createOpenAICompatibleStreamFn(
           finalizeToolCalls(pendingToolCalls);
 
         const reason =
-          toolCalls.length > 0 ? "toolUse" : "stop";
+          toolCalls.length > 0
+            ? "toolUse"
+            : finishReason === "length"
+              ? "length"
+              : "stop";
 
         const message = createAssistantMessage(
           model,
@@ -1276,6 +1292,30 @@ type OpenAIUsage = {
   prompt_cache_hit_tokens?: number;
 };
 
+
+/**
+ * 取出 chunk 里的 finish_reason。
+ * 只用它来识别 "length"（输出被截断）；其余情况仍按有没有 tool call 判断。
+ */
+export function extractFinishReason(
+  data: string,
+): string | undefined {
+  if (data === "[DONE]") {
+    return undefined;
+  }
+
+  try {
+    const chunk = JSON.parse(data) as {
+      choices?: Array<{ finish_reason?: string | null }>;
+    };
+
+    const reason = chunk.choices?.[0]?.finish_reason;
+
+    return typeof reason === "string" ? reason : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 单独提取 usage，不改动 parseOpenAIStreamData：

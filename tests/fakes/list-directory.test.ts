@@ -146,4 +146,22 @@ describe("list_directory", () => {
       );
     },
   );
+
+  it.runIf(process.platform === "win32")(
+    "rejects a path on another drive",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      const tool =
+        createListDirectoryTool(tempDirectory);
+
+      // 旧实现会把它当成 workspace 内路径，转去 readdir
+      await expect(
+        tool.execute("call-1", { path: "Z:\\" }),
+      ).rejects.toThrow("outside the workspace");
+    },
+  );
 });

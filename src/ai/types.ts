@@ -110,6 +110,9 @@ export type Context = {
 };
 
 export type SimpleStreamOptions = {
+  /** 输出上限；Provider 发送为 max_tokens。不传则用模型默认值。 */
+  maxTokens?: number;
+
   signal?: AbortSignal;
 
   /*

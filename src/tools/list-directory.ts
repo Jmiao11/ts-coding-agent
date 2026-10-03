@@ -3,7 +3,6 @@ import {
 } from "node:fs/promises";
 
 import {
-  relative,
   resolve,
 } from "node:path";
 
@@ -12,6 +11,10 @@ import Type from "typebox";
 import type {
   AgentTool,
 } from "../agent/types.js";
+
+import {
+  resolveWorkspacePath,
+} from "./workspace-path.js";
 
 
 const listDirectoryParameters =
@@ -75,44 +78,13 @@ export function createListDirectoryTool(
         parameters.path ?? ".";
 
 
-      const absolutePath =
-        resolve(
-          root,
-          requestedPath,
-        );
-
-
-      const relativePath =
-        relative(
-          root,
-          absolutePath,
-        );
-
-
-      /*
-       * 禁止：
-       *
-       * ../
-       * ../../
-       *
-       * 逃出 workspace。
-       *
-       * 但这里允许 "."，
-       * 因为列 workspace 根目录是正常需求。
-       */
-      if (
-        relativePath === ".."
-        || relativePath.startsWith(
-          `..${process.platform === "win32"
-            ? "\\"
-            : "/"
-          }`,
-        )
-      ) {
-        throw new Error(
-          `Path is outside the workspace: ${requestedPath}`,
-        );
-      }
+      const {
+        absolutePath,
+        relativePath,
+      } = resolveWorkspacePath(
+        root,
+        requestedPath,
+      );
 
 
       const directoryEntries =
@@ -200,7 +172,7 @@ export function createListDirectoryTool(
 
         details: {
           path:
-            relativePath || ".",
+            relativePath,
 
           entries,
         },

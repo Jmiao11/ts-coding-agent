@@ -507,6 +507,54 @@ describe("parseOpenAIStreamData", () => {
 
 
 describe("createOpenAICompatibleStreamFn", () => {
+  it("reports length when the output is cut off, and sends max_tokens", async () => {
+    const encoder = new TextEncoder();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const data of [
+          '{"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}',
+          "[DONE]",
+        ]) {
+          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        }
+
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 200 }));
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const stream = await streamFn(model, context, { maxTokens: 50 });
+
+    let done: AssistantMessage | undefined;
+    let reason: string | undefined;
+
+    for await (const event of stream) {
+      if (event.type === "done") {
+        done = event.message;
+        reason = event.reason;
+      }
+    }
+
+    // 以前会报 stop：截断的输出被当成完整的
+    expect(reason).toBe("length");
+    expect(done?.stopReason).toBe("length");
+
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { max_tokens?: number };
+
+    expect(requestBody.max_tokens).toBe(50);
+  });
+
   it(
     "converts an HTTP SSE response into assistant stream events",
     async () => {

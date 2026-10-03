@@ -171,12 +171,16 @@ const fakeModel = {
  * 每次返回 SUMMARY-1、SUMMARY-2……
  * 同时记录总结请求和工具定义。
  */
-function fakeSummarizer() {
+function fakeSummarizer(
+  stopReasons: Array<"stop" | "length"> = [],
+) {
   const prompts: string[] = [];
   const toolsSeen: unknown[] = [];
+  const maxTokensSeen: unknown[] = [];
 
   const streamFn: StreamFn = (_model, context, options) => {
     toolsSeen.push(options?.tools);
+    maxTokensSeen.push(options?.maxTokens);
 
     const request = context.messages.find(
       (message) => message.role === "user",
@@ -188,24 +192,26 @@ function fakeSummarizer() {
         : "",
     );
 
+    const stopReason = stopReasons[prompts.length - 1] ?? "stop";
+
     const message: AssistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: `SUMMARY-${prompts.length}` }],
       provider: "fake",
       model: "fake",
-      stopReason: "stop",
+      stopReason,
       timestamp: 1,
     };
 
     const stream = createAssistantMessageEventStream();
     stream.push({ type: "start", partial: message });
-    stream.push({ type: "done", reason: "stop", message });
+    stream.push({ type: "done", reason: stopReason, message });
     stream.end();
 
     return stream;
   };
 
-  return { streamFn, prompts, toolsSeen };
+  return { streamFn, prompts, toolsSeen, maxTokensSeen };
 }
 
 
@@ -309,6 +315,7 @@ describe("createCompactor", () => {
 
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("<original-request>");
+    expect(prompts[0]).toContain("under about 80 tokens");
     expect(prompts[0]).toContain('read_file({"path":"f0.ts"})');
     expect(prompts[0]).not.toContain('read_file({"path":"f6.ts"})');
 
@@ -349,5 +356,67 @@ describe("createCompactor", () => {
     expect(events).toHaveLength(2);
 
     expect(toolsSeen).toEqual([undefined, undefined]);
+  });
+
+  // 有可总结的内容（1、2），且超过阈值
+  function overflowing(): AgentMessage[] {
+    return [
+      user("task"),                                          // 0
+      callTool("a.ts"),                                      // 1
+      result("x".repeat(600), false, "call-a.ts"),           // 2
+      callTool("b.ts", { input: 900, output: 10 }),          // 3
+      result("x".repeat(1200), false, "call-b.ts"),          // 4
+    ];
+  }
+
+
+  it("retries once with a shorter instruction when the summary is cut off", async () => {
+    const { streamFn, prompts, maxTokensSeen } =
+      fakeSummarizer(["length", "stop"]);
+
+    const events: CompactionEvent[] = [];
+
+    const compactor = createCompactor({
+      model: fakeModel,
+      streamFn,
+      settings,
+      onCompaction: (event) => {
+        events.push(event);
+      },
+    });
+
+    const view = await compactor.transformContext(overflowing());
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("cut off at the output limit");
+    expect(summaryText(view[1])).toContain("SUMMARY-2");
+
+    // 硬上限 = 0.8 × reserve(200)
+    expect(maxTokensSeen).toEqual([160, 160]);
+    expect(events).toHaveLength(1);
+  });
+
+
+  it("gives up after two cut-off summaries and keeps the context unchanged", async () => {
+    const { streamFn, prompts } =
+      fakeSummarizer(["length", "length"]);
+
+    const errors: unknown[] = [];
+
+    const compactor = createCompactor({
+      model: fakeModel,
+      streamFn,
+      settings,
+      onError: (error) => {
+        errors.push(error);
+      },
+    });
+
+    const messages = overflowing();
+    const view = await compactor.transformContext(messages);
+
+    expect(prompts).toHaveLength(2);
+    expect(view).toBe(messages);
+    expect(errors).toHaveLength(1);
   });
 });

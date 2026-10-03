@@ -212,6 +212,12 @@ export type CompactionSettings = {
 
   /** 压缩后保留原文的最近消息量（Pi 默认 20000） */
   keepRecentTokens: number;
+
+  /** 写进 prompt 的总结目标（软约束），默认 0.4 × reserveTokens */
+  maxSummaryTokens?: number;
+
+  /** 总结请求的输出上限（max_tokens），默认 0.8 × reserveTokens */
+  maxSummaryOutputTokens?: number;
 };
 
 
@@ -392,10 +398,40 @@ function sumTokens(
 }
 
 
+function addUsage(
+  total: Usage | undefined,
+  next: Usage,
+): Usage {
+  if (!total) {
+    return next;
+  }
+
+  const hasCache =
+    total.cacheRead !== undefined
+    || next.cacheRead !== undefined;
+
+  return {
+    input: total.input + next.input,
+    output: total.output + next.output,
+    ...(hasCache
+      ? { cacheRead: (total.cacheRead ?? 0) + (next.cacheRead ?? 0) }
+      : {}),
+  };
+}
+
+
 export function createCompactor(
   options: CompactorOptions,
 ): Compactor {
   const { model, streamFn, settings } = options;
+
+  const maxSummaryOutputTokens =
+    settings.maxSummaryOutputTokens
+    ?? Math.floor(0.8 * settings.reserveTokens);
+
+  const maxSummaryTokens =
+    settings.maxSummaryTokens
+    ?? Math.floor(0.4 * settings.reserveTokens);
 
   let state: CompactionState | undefined;
 
@@ -465,65 +501,91 @@ export function createCompactor(
         : SUMMARY_INSTRUCTIONS,
     );
 
-    // 不带 tools：总结请求不应该调用工具
-    const context: Context = {
-      systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: parts.join("\n\n"),
-          timestamp: Date.now(),
-        },
-      ],
-    };
-
-    const stream = await streamFn(
-      model,
-      context,
-      signal ? { signal } : undefined,
+    parts.push(
+      `Keep the checkpoint under about ${maxSummaryTokens} tokens. Prioritize findings and remaining work; compress older details when updating.`,
     );
 
-    let final: AssistantMessage | undefined;
+    let totalUsage: Usage | undefined;
 
-    for await (const event of stream) {
-      if (event.type === "done") {
-        final = event.message;
-      } else if (event.type === "error") {
-        final = event.error;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const prompt =
+        attempt === 1
+          ? parts.join("\n\n")
+          : `${parts.join("\n\n")}\n\nYour previous checkpoint was cut off at the output limit. Write a much shorter one: at most about ${Math.floor(maxSummaryTokens / 2)} tokens, one short line per item.`;
+
+      // 不带 tools：总结请求不应该调用工具
+      const context: Context = {
+        systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+
+      const stream = await streamFn(
+        model,
+        context,
+        {
+          maxTokens: maxSummaryOutputTokens,
+          ...(signal ? { signal } : {}),
+        },
+      );
+
+      let final: AssistantMessage | undefined;
+
+      for await (const event of stream) {
+        if (event.type === "done") {
+          final = event.message;
+        } else if (event.type === "error") {
+          final = event.error;
+        }
       }
+
+      if (final?.usage) {
+        totalUsage = addUsage(totalUsage, final.usage);
+      }
+
+      if (
+        !final
+        || final.stopReason === "error"
+        || final.stopReason === "aborted"
+      ) {
+        throw new Error(
+          `Summarization failed: ${final?.errorMessage ?? "no response"}`,
+        );
+      }
+
+      // 被截断的总结不完整，不能当检查点；先带着"写短一点"重试一次
+      if (final.stopReason === "length") {
+        if (attempt === 1) {
+          continue;
+        }
+
+        throw new Error(
+          "Summarization hit the output limit twice; the summary would be incomplete.",
+        );
+      }
+
+      const text = final.content
+        .filter((item): item is TextContent => item.type === "text")
+        .map((item) => item.text)
+        .join("")
+        .trim();
+
+      if (text.length === 0) {
+        throw new Error("Summarization returned an empty summary.");
+      }
+
+      return {
+        text,
+        ...(totalUsage ? { usage: totalUsage } : {}),
+      };
     }
 
-    if (
-      !final
-      || final.stopReason === "error"
-      || final.stopReason === "aborted"
-    ) {
-      throw new Error(
-        `Summarization failed: ${final?.errorMessage ?? "no response"}`,
-      );
-    }
-
-    // 被截断的总结不完整，不能当检查点用
-    if (final.stopReason === "length") {
-      throw new Error(
-        "Summarization hit the output limit; the summary would be incomplete.",
-      );
-    }
-
-    const text = final.content
-      .filter((item): item is TextContent => item.type === "text")
-      .map((item) => item.text)
-      .join("")
-      .trim();
-
-    if (text.length === 0) {
-      throw new Error("Summarization returned an empty summary.");
-    }
-
-    return {
-      text,
-      ...(final.usage ? { usage: final.usage } : {}),
-    };
+    throw new Error("Summarization failed: no attempt succeeded.");
   }
 
 
