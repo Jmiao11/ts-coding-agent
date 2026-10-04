@@ -101,10 +101,15 @@ import {
   sanitizeForLlm,
 } from "./session/sanitize-for-llm.js";
 
+import {
+  textOf,
+} from "./context/token-estimate.js";
+
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
 
 const HELP = `用法：agent-harness [选项] "任务描述"
+继续会话（-c / -r / --session）时可以不写任务描述，选好会话后再输入。
 
 在 Git 仓库里运行 coding agent。改动不会自动提交，请用 git diff 审查。
 
@@ -183,9 +188,10 @@ if (sessionModes > 1) {
   fail("-c、-r、--session 只能选一个。");
 }
 
-const task = positionals.join(" ").trim();
+// 继续会话时可以不写任务描述：选好会话后再输入。
+const argTask = positionals.join(" ").trim();
 
-if (task.length === 0) {
+if (argTask.length === 0 && sessionModes === 0) {
   fail(HELP);
 }
 
@@ -310,6 +316,36 @@ function formatTime(
 }
 
 
+/** Agent 创建之前读一行输入：Ctrl+C 直接退出 */
+async function promptLine(
+  question: string,
+): Promise<string> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  rl.on("SIGINT", () => {
+    rl.close();
+    console.log("\n已取消。");
+    process.exit(130);
+  });
+
+  const closed = new Promise<string>((resolvePromise) => {
+    rl.once("close", () => resolvePromise(""));
+  });
+
+  try {
+    return await Promise.race([
+      rl.question(question).catch(() => ""),
+      closed,
+    ]);
+  } finally {
+    rl.close();
+  }
+}
+
+
 async function pickSession(
   sessions: SessionSummary[],
 ): Promise<string> {
@@ -342,34 +378,7 @@ async function pickSession(
     );
   }
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  // 这时 Agent 还没创建：Ctrl+C 直接退出
-  rl.on("SIGINT", () => {
-    rl.close();
-    console.log("\n已取消。");
-    process.exit(130);
-  });
-
-  const closed = new Promise<string>((resolvePromise) => {
-    rl.once("close", () => resolvePromise(""));
-  });
-
-  let answer: string;
-
-  try {
-    answer = await Promise.race([
-      rl
-        .question("\n继续哪一个？输入编号（直接回车取消）：")
-        .catch(() => ""),
-      closed,
-    ]);
-  } finally {
-    rl.close();
-  }
+  const answer = await promptLine("\n继续哪一个？输入编号（直接回车取消）：");
 
   const choice = Number(answer.trim());
   const picked = Number.isInteger(choice) ? shown[choice - 1] : undefined;
@@ -456,6 +465,42 @@ const {
   writer: sessionWriter,
   restored,
 } = await openSession();
+
+
+async function askForTask(): Promise<string> {
+  if (!process.stdin.isTTY) {
+    fail("缺少任务描述：非交互环境里请把任务写在命令里。");
+  }
+
+  const lastUser = [...(restored?.messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (lastUser?.role === "user") {
+    console.log(`\n上次的最后一条：${oneLine(textOf(lastUser.content))}`);
+  }
+
+  const answer = (
+    await promptLine(
+      restored
+        ? "追问（直接回车取消）："
+        : "任务（直接回车取消）：",
+    )
+  ).trim();
+
+  if (answer.length === 0) {
+    console.log("已取消。");
+    process.exit(0);
+  }
+
+  return answer;
+}
+
+
+const task =
+  argTask.length > 0
+    ? argTask
+    : await askForTask();
 
 
 // ---------- Ctrl+C ----------
