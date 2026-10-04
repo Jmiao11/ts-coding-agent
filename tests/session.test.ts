@@ -85,6 +85,15 @@ async function createSession() {
 
 
 describe("session store", () => {
+  it.runIf(process.platform === "win32")(
+    "treats drive letter case as the same workspace",
+    () => {
+      expect(getSessionDir("f:\\repo", "C:\\sessions")).toBe(
+        getSessionDir("F:\\repo", "C:\\sessions"),
+      );
+    },
+  );
+
   it("writes one linked entry per line and loads messages back unchanged", async () => {
     const { path, header } = await createSession();
 

@@ -110,11 +110,22 @@ export type LoadedSession = {
 
 // ---------- 位置 ----------
 
+/** Windows 盘符统一成大写：f:\repo 和 F:\repo 是同一个目录。 */
+function normalizeCwd(
+  cwd: string,
+): string {
+  const resolved = resolve(cwd);
+
+  return process.platform === "win32"
+    ? resolved.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+    : resolved;
+}
+
 export function getSessionDir(
   cwd: string,
   root = DEFAULT_SESSIONS_ROOT,
 ): string {
-  const safe = resolve(cwd)
+  const safe = normalizeCwd(cwd)
     .replace(/^[/\\]/, "")
     .replace(/[/\\:]/g, "-");
 
@@ -212,7 +223,7 @@ export function newSessionFile(
     version: SESSION_VERSION,
     id,
     timestamp,
-    cwd: resolve(cwd),
+    cwd: normalizeCwd(cwd),
   };
 
   const fileName =
