@@ -40,7 +40,7 @@ export function createCodingSystemPrompt(
     "- Be efficient: skip files that are irrelevant to the task. Call independent tools in the same turn.",
 
     // 观察：叙述用英文，结论用中文
-    "- Always reply in the same language the user used.",
+    "- Always reply in the same language the user used, including the short notes you write between tool calls.",
 
     // 观察（README 任务）：为验证文档，在 workspace 外做了全局安装
     "- Stay inside the workspace: do not install packages globally, change system settings, or create files outside the workspace unless the task asks for it.",
