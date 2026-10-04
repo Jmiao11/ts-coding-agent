@@ -86,9 +86,18 @@ import {
 
 import {
   createSessionWriter,
+  findMostRecentSession,
+  getSessionDir,
+  loadSession,
   newSessionFile,
+  rebuildSession,
+  type RebuiltSession,
+  type SessionWriter,
 } from "./session/session-store.js";
 
+import {
+  sanitizeForLlm,
+} from "./session/sanitize-for-llm.js";
 
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
@@ -103,6 +112,8 @@ const HELP = `用法：agent-harness [选项] "任务描述"
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
   -h, --help              显示帮助
+  
+  -c, --continue          继续这个 workspace 最近的会话（任务描述作为追问）
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
@@ -131,6 +142,9 @@ function parseCliArgs() {
       "env-file": { type: "string" },
       "context-window": { type: "string" },
       // 选项名里有连字符，所以必须加引号
+
+      continue: { type: "boolean", short: "c" },
+
     },
   });
 }
@@ -258,8 +272,51 @@ if (gitStatus.stdout.trim().length > 0) {
 
 // ---------- Session ----------
 
-const session = newSessionFile(workspaceRoot);
-const sessionWriter = createSessionWriter(session);
+function openSession(): {
+  writer: SessionWriter;
+  restored?: RebuiltSession;
+} {
+  if (values.continue) {
+    const path =
+      findMostRecentSession(getSessionDir(workspaceRoot));
+
+    if (path) {
+      try {
+        const loaded = loadSession(path);
+
+        return {
+          writer: createSessionWriter({
+            path,
+            header: loaded.header,
+            entries: loaded.entries,
+          }),
+          restored: rebuildSession(loaded.entries),
+        };
+      } catch (error) {
+        fail(
+          `无法继续会话 ${path}：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    console.warn(
+      "这个 workspace 还没有会话记录，开始新会话。\n",
+    );
+  }
+
+  return {
+    writer: createSessionWriter(
+      newSessionFile(workspaceRoot),
+    ),
+  };
+}
+
+const {
+  writer: sessionWriter,
+  restored,
+} = openSession();
 
 
 // ---------- Ctrl+C ----------
@@ -357,6 +414,7 @@ const compactor = createCompactor({
   model,
   streamFn,
   settings: compactionSettings,
+  initialCheckpoint: restored?.checkpoint,
 
   onEstimate(tokens, threshold) {
     console.log(`[context] est=${tokens} threshold=${threshold}`);
@@ -410,6 +468,7 @@ const compactor = createCompactor({
 const agent = new Agent({
   initialState: {
     model,
+    messages: restored?.messages ?? [],
 
     systemPrompt:
       createCodingSystemPrompt(workspaceRoot),
@@ -425,9 +484,7 @@ const agent = new Agent({
   },
 
   loopConfig: {
-    convertToLlm(messages) {
-      return [...messages];
-    },
+    convertToLlm: sanitizeForLlm,
 
     transformContext: (messages, signal) =>
       compactor.transformContext(messages, signal),
@@ -523,6 +580,12 @@ console.log("workspace:", workspaceRoot);
 console.log("model:", modelId);
 console.log("thinking:", thinking ?? "(provider default)");
 console.log(
+  "session:",
+  restored
+    ? `继续 ${sessionWriter.path}（${restored.messages.length} 条消息${restored.checkpoint ? "，已压缩过" : ""}）`
+    : sessionWriter.path,
+);
+console.log(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
 );
 console.log("task:", task, "\n");
@@ -568,7 +631,8 @@ if (totalInput > 0 || compactionCount > 0) {
   });
 }
 
-console.log(`\n会话记录：${session.path}`);
+console.log(`\n会话记录：${sessionWriter.path}`);
+console.log('继续这个会话：agent-harness -c "追问内容"');
 console.log(
   "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
 );

@@ -44,6 +44,10 @@ import {
   rebuildSession,
 } from "../src/session/session-store.js";
 
+import {
+  sanitizeForLlm,
+} from "../src/session/sanitize-for-llm.js";
+
 
 let root: string | undefined;
 
@@ -351,5 +355,77 @@ describe("session + compaction", () => {
     );
 
     expect(restoredSummarizer.calls()).toBe(0);
+  });
+});
+
+
+describe("sanitizeForLlm", () => {
+  it("drops failed assistant turns and closes tool calls that never got a result", () => {
+    const history: AgentMessage[] = [
+      { role: "user", content: "task", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: "read_file",
+            arguments: { path: "a.ts" },
+          },
+          {
+            type: "toolCall",
+            id: "call-2",
+            name: "run_command",
+            arguments: { command: "ping" },
+          },
+        ],
+        provider: "fake",
+        model: "fake",
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial" }],
+        provider: "fake",
+        model: "fake",
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+        timestamp: 4,
+      },
+      { role: "user", content: "继续", timestamp: 5 },
+    ];
+
+    const sanitized = sanitizeForLlm(history);
+
+    expect(
+      sanitized.map((message) =>
+        message.role === "toolResult"
+          ? `toolResult:${message.toolCallId}`
+          : message.role,
+      ),
+    ).toEqual([
+      "user",
+      "assistant",
+      "toolResult:call-1",
+      "toolResult:call-2",
+      "user",
+    ]);
+
+    expect(sanitized[3]).toMatchObject({
+      toolCallId: "call-2",
+      toolName: "run_command",
+      isError: true,
+    });
+
+    expect(sanitizeForLlm(sanitized)).toEqual(sanitized);
   });
 });
