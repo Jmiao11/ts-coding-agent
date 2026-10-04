@@ -682,9 +682,22 @@ export function createCompactor(
       }
 
       // 被切开那一轮的开头 user 消息原样保留，不进总结
-      const toSummarize = messages
+      const range = messages
         .slice(startIndex, cut.firstKeptIndex)
         .filter((_, offset) => startIndex + offset !== cut.turnStartIndex);
+
+      // 多轮之后：上次原样保留的（更早一轮的）任务这次不再保留。
+      // 它不在新视图里，上次的总结也被告知不要复制它，所以必须放进这次的总结。
+      const previousPinned = state?.turnStartIndex ?? -1;
+
+      const droppedPin =
+        previousPinned >= 0 && previousPinned !== cut.turnStartIndex
+          ? messages[previousPinned]
+          : undefined;
+
+      const toSummarize = droppedPin
+        ? [droppedPin, ...range]
+        : range;
 
       if (toSummarize.length === 0) {
         return view;

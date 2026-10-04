@@ -358,6 +358,50 @@ describe("createCompactor", () => {
     expect(toolsSeen).toEqual([undefined, undefined]);
   });
 
+  it("keeps an earlier task in the summary when a later compaction pins a new turn", async () => {
+    const { streamFn, prompts } = fakeSummarizer();
+
+    const compactor = createCompactor({
+      model: fakeModel,
+      streamFn,
+      settings,
+    });
+
+    const messages: AgentMessage[] = [
+      user("任务一：只读，不要修改 src"),
+    ];
+
+    for (let index = 0; index < 8; index += 1) {
+      messages.push(
+        callTool(`f${index}.ts`, { input: 100 + index * 110, output: 10 }),
+      );
+      messages.push(
+        result("x".repeat(400), false, `call-f${index}.ts`),
+      );
+    }
+
+    // 第一次压缩：原样保留任务一（下标 0）。
+    const firstView = await compactor.transformContext(messages);
+    expect(firstView[0]).toBe(messages[0]);
+
+    // 第二个任务从下标 17 开始。
+    messages.push(user("任务二：总结一下"));
+    messages.push(callTool("h0.ts"));
+    messages.push(result("x".repeat(400), false, "call-h0.ts"));
+    messages.push(callTool("h1.ts"));
+    messages.push(result("x".repeat(400), false, "call-h1.ts"));
+    messages.push(callTool("h2.ts", { input: 950, output: 10 }));
+    messages.push(result("x".repeat(400), false, "call-h2.ts"));
+
+    const secondView = await compactor.transformContext(messages);
+
+    expect(prompts).toHaveLength(2);
+    expect(secondView[0]).toBe(messages[17]);
+    expect(secondView.slice(2)).toEqual(messages.slice(20));
+    expect(prompts[1]).toContain("<original-request>\n任务二");
+    expect(prompts[1]).toContain("[User]: 任务一：只读，不要修改 src");
+  });
+
   // 有可总结的内容（1、2），且超过阈值
   function overflowing(): AgentMessage[] {
     return [
