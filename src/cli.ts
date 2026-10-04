@@ -732,7 +732,11 @@ agent.subscribe((event) => {
     modelCallCount += 1;
 
     // Provider 错误（HTTP 400 等）的正文在 errorMessage 里，否则终端上看不到
-    if (event.message.errorMessage) {
+    // 中止不算错误：结尾会打印「已中止」
+    if (
+      event.message.stopReason === "error"
+      && event.message.errorMessage
+    ) {
       console.error(`\n[model error] ${event.message.errorMessage}\n`);
     }
 

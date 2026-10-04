@@ -52,6 +52,65 @@ import {
 
 
 describe("runAgentLoop", () => {
+  it("does not call the model again after the run is aborted during a tool call", async () => {
+    const controller = new AbortController();
+    const prompt: UserMessage = { role: "user", content: "run it", timestamp: 1 };
+    const toolCallMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "slow", arguments: {} }],
+      provider: "fake",
+      model: "fake-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+    let modelCalls = 0;
+    const streamFn: StreamFn = (_model, _context, options) => {
+      modelCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      if (options?.signal?.aborted) {
+        const aborted: AssistantMessage = {
+          ...toolCallMessage,
+          content: [{ type: "text", text: "" }],
+          stopReason: "aborted",
+          errorMessage: "This operation was aborted",
+        };
+        stream.push({ type: "error", reason: "aborted", error: aborted });
+      } else {
+        stream.push({ type: "start", partial: toolCallMessage });
+        stream.push({ type: "done", reason: "toolUse", message: toolCallMessage });
+      }
+      stream.end();
+      return stream;
+    };
+    const parameters = Type.Object({});
+    const slowTool: AgentTool<typeof parameters, Record<string, never>> = {
+      name: "slow",
+      label: "Slow",
+      description: "Simulates a command interrupted by Ctrl+C.",
+      parameters,
+      async execute() {
+        controller.abort();
+        throw new Error("Command stopped: the user interrupted the run before it finished: slow");
+      },
+    };
+    const statuses: string[] = [];
+    const config: AgentLoopConfig = {
+      model: { id: "fake-model", provider: "fake", name: "Fake Model", contextWindow: 1000, maxTokens: 100 },
+      convertToLlm(messages) { return [...messages]; },
+      extensions: [{
+        name: "status",
+        hooks: { onRunEnd({ status }) { statuses.push(status); } },
+      }],
+    };
+    const newMessages = await runAgentLoop(
+      [prompt], { messages: [], tools: [slowTool] }, config,
+      controller.signal, streamFn, () => {},
+    );
+    expect(modelCalls).toBe(1);
+    expect(newMessages.at(-1)).toMatchObject({ role: "toolResult", isError: true });
+    expect(statuses).toEqual(["aborted"]);
+  });
+
   it("runs one streamed model turn and emits lifecycle events in order", async () => {
     const prompt: UserMessage = {
       role: "user",

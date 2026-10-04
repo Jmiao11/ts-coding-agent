@@ -210,15 +210,9 @@ async function executeToolCall(
 
 
 /**
- * 执行一次最小 Agent Loop。
- *
- * 当前版本：
- * - 支持 prompt
- * - 支持 transformContext
- * - 支持 convertToLlm
- * - 支持流式模型输出
- *
- * 暂时还没有 Tool Call 循环。
+ * 执行一次 Agent Loop：
+ * Model → Tool → Model …，直到模型不再调用工具、出错或被中止。
+ * 每次调用模型前：transformContext（压缩）→ convertToLlm → beforeModelCall。
  */
 export async function runAgentLoop(
   prompts: AgentMessage[],
@@ -560,6 +554,13 @@ async function endTurn(
      * 下一轮再让模型处理工具结果。
      */
     await endTurn(finalMessage, toolResults);
+
+    // 已中止：不再调用模型或触发压缩，turn_start / turn_end 保持成对。
+    if (signal?.aborted) {
+      runStatus = "aborted";
+      break;
+    }
+
     await startTurn();
   }
 
