@@ -49,8 +49,10 @@ export class BudgetExceededError extends Error {
 
 export type BudgetExtension = AgentExtension & {
   getState(): BudgetState;
-};
 
+  /** 每个新任务开始前清零计数 */
+  reset(): void;
+};
 
 function assertLimit(
   name: string,
@@ -126,6 +128,11 @@ export function createBudgetExtension(
         modelCalls,
         toolCalls,
       };
+    },
+
+    reset() {
+      modelCalls = 0;
+      toolCalls = 0;
     },
   };
 }

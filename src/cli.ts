@@ -40,6 +40,14 @@ import {
 } from "./ai/providers/openai-compatible.js";
 
 import {
+  createCompactor,
+} from "./context/compaction.js";
+
+import {
+  textOf,
+} from "./context/token-estimate.js";
+
+import {
   BudgetExceededError,
   createBudgetExtension,
 } from "./extensions/budget.js";
@@ -55,6 +63,23 @@ import {
 import {
   createCodingSystemPrompt,
 } from "./prompts/coding-system-prompt.js";
+
+import {
+  sanitizeForLlm,
+} from "./session/sanitize-for-llm.js";
+
+import {
+  createSessionWriter,
+  findMostRecentSession,
+  getSessionDir,
+  listSessions,
+  loadSession,
+  newSessionFile,
+  rebuildSession,
+  type RebuiltSession,
+  type SessionSummary,
+  type SessionWriter,
+} from "./session/session-store.js";
 
 import {
   createEditFileTool,
@@ -80,55 +105,32 @@ import {
   createWriteFileTool,
 } from "./tools/write-file.js";
 
-import {
-  createCompactor,
-} from "./context/compaction.js";
-
-import {
-  createSessionWriter,
-  findMostRecentSession,
-  getSessionDir,
-  loadSession,
-  listSessions,
-  newSessionFile,
-  rebuildSession,
-  type RebuiltSession,
-  type SessionWriter,
-  type SessionSummary,
-} from "./session/session-store.js";
-
-import {
-  sanitizeForLlm,
-} from "./session/sanitize-for-llm.js";
-
-import {
-  textOf,
-} from "./context/token-estimate.js";
 
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
 
-const HELP = `用法：agent-harness [选项] "任务描述"
-继续会话（-c / -r / --session）时可以不写任务描述，选好会话后再输入。
+const HELP = `用法：
+  agent-harness [选项] "任务描述"   运行一个任务后退出
+  agent-harness [选项]              交互模式：连续输入多个任务（需要交互式终端）
 
 在 Git 仓库里运行 coding agent。改动不会自动提交，请用 git diff 审查。
 
 选项：
+  -c, --continue          继续这个 workspace 最近的会话
+  -r, --resume            从这个 workspace 的会话列表里选一个继续
+      --session <id>      按 id 前缀继续指定的会话（-r 列表里显示的 8 位）
   -w, --workspace <dir>   工作目录（默认：当前目录；必须在 Git 仓库里）
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
   -h, --help              显示帮助
-  
-  -c, --continue          继续这个 workspace 最近的会话（任务描述作为追问）
-  -r, --resume            从这个 workspace 的会话列表里选一个继续
-      --session <id>      按 id 前缀继续指定的会话（-r 列表里显示的 8 位）
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
   可选：AGENT_THINKING=disabled（DeepSeek：显式关闭 thinking）
 
-运行中按 Ctrl+C 中止；再按一次强制退出。`;
+交互模式：/exit、Ctrl+C 或 Ctrl+D 退出；任务运行中按 Ctrl+C 只中止当前任务。
+任何时候连按两次 Ctrl+C 都会强制退出。`;
 
 
 function fail(
@@ -146,20 +148,16 @@ function parseCliArgs() {
     allowPositionals: true,
     options: {
       help: { type: "boolean", short: "h" },
+      continue: { type: "boolean", short: "c" },
+      resume: { type: "boolean", short: "r" },
+      session: { type: "string" },
       workspace: { type: "string", short: "w" },
       model: { type: "string", short: "m" },
       "env-file": { type: "string" },
       "context-window": { type: "string" },
-      // 选项名里有连字符，所以必须加引号
-
-      continue: { type: "boolean", short: "c" },
-      resume: { type: "boolean", short: "r" },
-      session: { type: "string" },
-
     },
   });
 }
-// positionals 放"没名字的普通参数"。
 
 let args: ReturnType<typeof parseCliArgs>;
 
@@ -188,11 +186,16 @@ if (sessionModes > 1) {
   fail("-c、-r、--session 只能选一个。");
 }
 
-// 继续会话时可以不写任务描述：选好会话后再输入。
+// 写了任务描述：跑一次就退出；没写：进入交互模式
 const argTask = positionals.join(" ").trim();
+const interactive = argTask.length === 0;
 
-if (argTask.length === 0 && sessionModes === 0) {
-  fail(HELP);
+if (interactive && !process.stdin.isTTY) {
+  fail(
+    sessionModes === 0
+      ? HELP
+      : "缺少任务描述：非交互环境里请把任务写在命令里。",
+  );
 }
 
 
@@ -292,10 +295,7 @@ if (gitStatus.stdout.trim().length > 0) {
 }
 
 
-// ---------- Session ----------
-
-const MAX_LISTED_SESSIONS = 20;
-
+// ---------- 终端输入 ----------
 
 function oneLine(
   text: string,
@@ -316,34 +316,51 @@ function formatTime(
 }
 
 
-/** Agent 创建之前读一行输入：Ctrl+C 直接退出 */
+/**
+ * 读一行输入。Ctrl+C 或 Ctrl+D（输入流关闭）时返回 null，由调用方决定怎么处理。
+ * 用于选会话和 REPL 提示符；命令确认另有自己的处理（Ctrl+C 要中止 Agent）。
+ */
 async function promptLine(
   question: string,
-): Promise<string> {
+): Promise<string | null> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
-  rl.on("SIGINT", () => {
-    rl.close();
-    console.log("\n已取消。");
-    process.exit(130);
-  });
+  return new Promise<string | null>((resolvePromise) => {
+    let settled = false;
 
-  const closed = new Promise<string>((resolvePromise) => {
-    rl.once("close", () => resolvePromise(""));
-  });
+    const settle = (value: string | null): void => {
+      if (!settled) {
+        settled = true;
+        resolvePromise(value);
+      }
+    };
 
-  try {
-    return await Promise.race([
-      rl.question(question).catch(() => ""),
-      closed,
-    ]);
-  } finally {
-    rl.close();
-  }
+    rl.on("SIGINT", () => {
+      console.log();
+      settle(null);
+      rl.close();
+    });
+
+    rl.once("close", () => settle(null));
+
+    rl.question(question).then(
+      (answer) => {
+        settle(answer);
+        rl.close();
+      },
+      () => settle(null),
+    );
+  });
 }
+
+
+// ---------- Session：每条完整消息追加一行 JSONL ----------
+// 放在主目录而不是 workspace：不污染仓库，transcript 里有读过的文件内容
+
+const MAX_LISTED_SESSIONS = 20;
 
 
 async function pickSession(
@@ -379,8 +396,7 @@ async function pickSession(
   }
 
   const answer = await promptLine("\n继续哪一个？输入编号（直接回车取消）：");
-
-  const choice = Number(answer.trim());
+  const choice = Number(answer?.trim() ?? "");
   const picked = Number.isInteger(choice) ? shown[choice - 1] : undefined;
 
   if (!picked) {
@@ -467,43 +483,9 @@ const {
 } = await openSession();
 
 
-async function askForTask(): Promise<string> {
-  if (!process.stdin.isTTY) {
-    fail("缺少任务描述：非交互环境里请把任务写在命令里。");
-  }
-
-  const lastUser = [...(restored?.messages ?? [])]
-    .reverse()
-    .find((message) => message.role === "user");
-
-  if (lastUser?.role === "user") {
-    console.log(`\n上次的最后一条：${oneLine(textOf(lastUser.content))}`);
-  }
-
-  const answer = (
-    await promptLine(
-      restored
-        ? "追问（直接回车取消）："
-        : "任务（直接回车取消）：",
-    )
-  ).trim();
-
-  if (answer.length === 0) {
-    console.log("已取消。");
-    process.exit(0);
-  }
-
-  return answer;
-}
-
-
-const task =
-  argTask.length > 0
-    ? argTask
-    : await askForTask();
-
-
 // ---------- Ctrl+C ----------
+// 任务运行中：第一次中止当前任务（交互模式回到提示符），第二次强制退出。
+// 在提示符或选择菜单里时，Ctrl+C 由 readline 接收，不会走到这里。
 
 let interrupted = false;
 
@@ -515,16 +497,13 @@ function handleInterrupt(): void {
   interrupted = true;
 
   console.error(
-    "\n[中止] 正在停止 Agent 和正在运行的命令（再按一次 Ctrl+C 强制退出）",
+    "\n[中止] 正在停止当前任务和正在运行的命令（再按一次 Ctrl+C 强制退出）",
   );
 
   agent.abort();
 }
 
 process.on("SIGINT", handleInterrupt);
-// 当前进程收到 SIGINT
-// ↓
-// 调用 handleInterrupt
 
 
 // ---------- 命令确认 ----------
@@ -568,7 +547,90 @@ async function askInTerminal(
 }
 
 
-// ---------- Agent ----------
+// ---------- 统计 ----------
+
+type UsageStats = {
+  modelCalls: number;
+  tools: string[];
+  input: number;
+  cached: number;
+  output: number;
+  peakInput: number;
+  compactions: number;
+  compactionInput: number;
+  compactionOutput: number;
+};
+
+
+function emptyStats(): UsageStats {
+  return {
+    modelCalls: 0,
+    tools: [],
+    input: 0,
+    cached: 0,
+    output: 0,
+    peakInput: 0,
+    compactions: 0,
+    compactionInput: 0,
+    compactionOutput: 0,
+  };
+}
+
+
+function addStats(
+  into: UsageStats,
+  from: UsageStats,
+): void {
+  into.modelCalls += from.modelCalls;
+  into.tools.push(...from.tools);
+  into.input += from.input;
+  into.cached += from.cached;
+  into.output += from.output;
+  into.peakInput = Math.max(into.peakInput, from.peakInput);
+  into.compactions += from.compactions;
+  into.compactionInput += from.compactionInput;
+  into.compactionOutput += from.compactionOutput;
+}
+
+
+function printTokens(
+  stats: UsageStats,
+  scope: string,
+): void {
+  if (stats.input > 0) {
+    console.log(`Token 用量（主任务${scope}）：`, {
+      input: stats.input,
+      cachedInput: stats.cached,
+      output: stats.output,
+      peakInput: stats.peakInput,
+    });
+  }
+
+  if (stats.compactions > 0) {
+    console.log(`Token 用量（压缩${scope}）：`, {
+      calls: stats.compactions,
+      input: stats.compactionInput,
+      output: stats.compactionOutput,
+    });
+  }
+
+  if (stats.input > 0 || stats.compactions > 0) {
+    console.log(`Token 合计${scope}：`, {
+      input: stats.input + stats.compactionInput,
+      output: stats.output + stats.compactionOutput,
+    });
+  }
+}
+
+
+/** 当前任务的统计；每个任务开始时清零 */
+let current = emptyStats();
+
+/** 整个进程（交互模式下所有任务）的统计 */
+const total = emptyStats();
+
+let taskCount = 0;
+
 
 // ---------- 模型与压缩 ----------
 
@@ -590,14 +652,12 @@ const streamFn = createOpenAICompatibleStreamFn({
 });
 
 // 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
-let compactionCount = 0;
-let compactionInput = 0;
-let compactionOutput = 0;
-
 const compactor = createCompactor({
   model,
   streamFn,
   settings: compactionSettings,
+
+  // 继续会话：从上次的压缩状态接着来
   initialCheckpoint: restored?.checkpoint,
 
   onEstimate(tokens, threshold) {
@@ -605,13 +665,13 @@ const compactor = createCompactor({
   },
 
   onCompaction(event) {
-    compactionCount += 1;
-    compactionInput += event.usage?.input ?? 0;
-    compactionOutput += event.usage?.output ?? 0;
+    current.compactions += 1;
+    current.compactionInput += event.usage?.input ?? 0;
+    current.compactionOutput += event.usage?.output ?? 0;
 
     console.log(
       [
-        `\n[compaction #${compactionCount}]`,
+        `\n[compaction #${total.compactions + current.compactions}]`,
         `est ${event.tokensBefore} → ~${event.estimatedTokensAfter}`,
         `summarized=${event.summarizedMessages}`,
         `kept=${event.keptMessages}`,
@@ -628,6 +688,7 @@ const compactor = createCompactor({
       `----- summary -----\n${event.summary}\n-------------------\n`,
     );
 
+    // 写入失败不中断任务：恢复时没有这条记录，会退回到完整 transcript
     try {
       sessionWriter.appendCompaction(event.checkpoint, {
         tokensBefore: event.tokensBefore,
@@ -635,9 +696,7 @@ const compactor = createCompactor({
       });
     } catch (error) {
       console.error(
-        `[session] 压缩记录写入失败：${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `[session] 压缩记录写入失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },
@@ -649,9 +708,19 @@ const compactor = createCompactor({
   },
 });
 
+
+// ---------- Agent ----------
+
+const budget = createBudgetExtension({
+  maxModelCalls: 50,
+  maxToolCalls: 120,
+});
+
 const agent = new Agent({
   initialState: {
     model,
+
+    // 继续会话时是完整 transcript；发给模型的视图由压缩器生成
     messages: restored?.messages ?? [],
 
     systemPrompt:
@@ -674,10 +743,7 @@ const agent = new Agent({
       compactor.transformContext(messages, signal),
 
     extensions: [
-      createBudgetExtension({
-        maxModelCalls: 50,
-        maxToolCalls: 120,
-      }),
+      budget,
       createCommandApprovalExtension({
         approve: askInTerminal,
       }),
@@ -689,24 +755,14 @@ const agent = new Agent({
 });
 
 
-const executedTools: string[] = [];
-let modelCallCount = 0;
-let totalInput = 0;
-let totalCached = 0;
-let totalOutput = 0;
-let peakInput = 0;
-
-
-
 agent.subscribe((event) => {
-
-  // 保存结束时的消息，不保存流式 partial。
+  // 只写完整消息；流式中的 partial 不写
   if (event.type === "message_end") {
     sessionWriter.appendMessage(event.message);
   }
 
   if (event.type === "tool_execution_start") {
-    executedTools.push(event.toolName);
+    current.tools.push(event.toolName);
   }
 
   if (
@@ -729,9 +785,8 @@ agent.subscribe((event) => {
     event.type === "message_end"
     && event.message.role === "assistant"
   ) {
-    modelCallCount += 1;
+    current.modelCalls += 1;
 
-    // Provider 错误（HTTP 400 等）的正文在 errorMessage 里，否则终端上看不到
     // 中止不算错误：结尾会打印「已中止」
     if (
       event.message.stopReason === "error"
@@ -743,10 +798,10 @@ agent.subscribe((event) => {
     const usage = event.message.usage;
 
     if (usage) {
-      totalInput += usage.input;
-      totalCached += usage.cacheRead ?? 0;
-      totalOutput += usage.output;
-      peakInput = Math.max(peakInput, usage.input);
+      current.input += usage.input;
+      current.cached += usage.cacheRead ?? 0;
+      current.output += usage.output;
+      current.peakInput = Math.max(current.peakInput, usage.input);
     }
 
     const text = event.message.content
@@ -764,6 +819,85 @@ agent.subscribe((event) => {
 });
 
 
+// ---------- 运行 ----------
+
+async function runTask(
+  task: string,
+): Promise<void> {
+  budget.reset();
+  current = emptyStats();
+  interrupted = false;
+
+  try {
+    await agent.prompt(task);
+  } catch (error) {
+    if (error instanceof BudgetExceededError) {
+      console.error(`\n[stopped] ${error.message}`);
+    } else {
+      // 意外错误：打印出来；交互模式里还可以接着输入下一个任务
+      console.error(
+        `\n[error] ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+      );
+      process.exitCode = 1;
+    }
+  }
+
+  if (interrupted) {
+    console.log("\n已中止。");
+  }
+
+  console.log("\n模型调用次数：", current.modelCalls);
+  console.log("执行过的工具：", current.tools);
+  printTokens(current, "");
+
+  addStats(total, current);
+  taskCount += 1;
+}
+
+
+async function runRepl(): Promise<void> {
+  console.log(
+    "\n交互模式：输入任务后回车运行；/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。",
+  );
+
+  // 继续会话时，先让用户确认接的是哪个会话
+  const lastUser = [...(restored?.messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (lastUser?.role === "user") {
+    console.log(`上次的最后一条：${oneLine(textOf(lastUser.content))}`);
+  }
+
+  while (true) {
+    const line = await promptLine("\n> ");
+
+    // Ctrl+C / Ctrl+D
+    if (line === null) {
+      break;
+    }
+
+    const input = line.trim();
+
+    // 误按回车：不退出
+    if (input.length === 0) {
+      continue;
+    }
+
+    if (input === "/exit") {
+      break;
+    }
+
+    await runTask(input);
+  }
+
+  if (taskCount > 1) {
+    console.log(`\n本次共 ${taskCount} 个任务：`);
+    printTokens(total, "，全部任务");
+  }
+}
+
+
 console.log("workspace:", workspaceRoot);
 console.log("model:", modelId);
 console.log("thinking:", thinking ?? "(provider default)");
@@ -776,53 +910,24 @@ console.log(
 console.log(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
 );
-console.log("task:", task, "\n");
 
-try {
-  await agent.prompt(task);
-} catch (error) {
-  if (error instanceof BudgetExceededError) {
-    console.error(`\n[stopped] ${error.message}`);
-  } else {
-    throw error;
+if (interactive) {
+  await runRepl();
+} else {
+  console.log("task:", argTask, "\n");
+  await runTask(argTask);
+
+  if (interrupted) {
+    process.exitCode = 130;
   }
 }
 
-if (interrupted) {
-  console.log("\n已中止。");
+// 新会话里一个任务都没跑的话，文件还没创建
+if (existsSync(sessionWriter.path)) {
+  console.log(`\n会话记录：${sessionWriter.path}`);
+  console.log("继续这个会话：agent-harness -c");
 }
 
-console.log("\n模型调用次数：", modelCallCount);
-console.log("执行过的工具：", executedTools);
-
-if (totalInput > 0) {
-  console.log("Token 用量（主任务）：", {
-    input: totalInput,
-    cachedInput: totalCached,
-    output: totalOutput,
-    peakInput,
-  });
-}
-
-if (compactionCount > 0) {
-  console.log("Token 用量（压缩）：", {
-    calls: compactionCount,
-    input: compactionInput,
-    output: compactionOutput,
-  });
-}
-
-if (totalInput > 0 || compactionCount > 0) {
-  console.log("Token 合计：", {
-    input: totalInput + compactionInput,
-    output: totalOutput + compactionOutput,
-  });
-}
-
-console.log(`\n会话记录：${sessionWriter.path}`);
-console.log('继续这个会话：agent-harness -c "追问内容"');
 console.log(
   "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
 );
-
-process.exitCode = interrupted ? 130 : 0;
