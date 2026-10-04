@@ -118,9 +118,14 @@ agent-harness -m deepseek-chat "跑一遍测试，并说明失败原因"
 | `-m, --model <id>` | 模型 ID，覆盖 `AGENT_MODEL` |
 | `--env-file <path>` | API 配置文件，默认主目录的 `.agent-harness.env` |
 | `--context-window <n>` | 工作预算（不是模型上限），估算超过就压缩；默认 128000，调小可用来测试压缩。必须是不小于 8000 的整数 |
+| `-c, --continue` | 继续这个 workspace 最近的会话（任务描述作为追问） |
+| `-r, --resume` | 从这个 workspace 的会话列表里选一个继续（交互式，需要 TTY） |
+| `--session <id>` | 按会话 ID 前缀继续指定的会话（`-r` 列表显示前 8 位） |
 | `-h, --help` | 显示帮助 |
 
-任务描述是位置参数：多个位置参数会用空格拼成一个任务；任务为空时打印帮助并以退出码 1 退出。所有文件工具的相对路径都相对 workspace 根目录，`run_command` 也在 workspace 根目录执行。
+任务描述是位置参数：多个位置参数会用空格拼成一个任务；未指定继续会话选项且任务为空时打印帮助并以退出码 1 退出。所有文件工具的相对路径都相对 workspace 根目录，`run_command` 也在 workspace 根目录执行。
+
+用 `-c` / `-r` / `--session` 继续会话时**可以不写任务描述**：CLI 先选好会话，再在终端里输入追问（直接回车则取消退出）。三者只能选一个，同时给多个会报错退出；`-c` 没有记录时就开一个新会话。不继续会话又没有任务描述时，仍然打印帮助并退出码 1。非交互环境（stdin 不是 TTY）不能这样省略任务描述，`-r` 也必须在交互式终端里用。
 
 agent 可用的工具：`list_directory`、`read_file`、`search_text`、`write_file`、`edit_file`、`run_command`。
 
@@ -159,6 +164,21 @@ pnpm test:watch    # vitest watch
 
 - `tsconfig.json` 是 `noEmit` 的类型检查配置，覆盖 `src/` 和 `tests/`；`tsconfig.build.json` 继承它并输出到 `dist/`。
 - 测试在 `tests/`（vitest）。
+
+## 会话记录
+
+每次运行都会把会话写成一个 JSONL 文件（第一行是元信息，之后每条消息一行；压缩也会记成一条）：
+
+- 根目录：`~/.agent-harness/sessions/`
+- 每个 workspace 一个子目录，名字由工作目录路径改写而来（去掉开头的 `/` 或 `\`，再把 `/` `\` `:` 换成 `-`，例如 `--F--学习资料-agent-harness--`）
+- 文件名形如 `<时间戳>_<uuid>.jsonl`
+
+所以会话记录和 key 一样放在主目录，不落在被 agent 修改的仓库里。
+
+- `-c` 选的是该 workspace 下**最近活动**（文件 mtime 最新）的那个会话
+- `-r` 列出最近活动的 20 个会话（每行显示活动时间、id 前 8 位、消息条数、是否压缩过，以及首条/最后一条用户消息），输入编号选择；更早的会话不会列出，用 `--session <id>` 按 id 前缀指定（前缀能匹配多个会话时会要求你多写几位）
+
+启动和结束时都会打印会话文件路径，结束时还会提示用 `agent-harness -c "追问内容"` 继续。
 
 代码结构：
 
