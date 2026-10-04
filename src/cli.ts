@@ -89,10 +89,12 @@ import {
   findMostRecentSession,
   getSessionDir,
   loadSession,
+  listSessions,
   newSessionFile,
   rebuildSession,
   type RebuiltSession,
   type SessionWriter,
+  type SessionSummary,
 } from "./session/session-store.js";
 
 import {
@@ -114,6 +116,8 @@ const HELP = `用法：agent-harness [选项] "任务描述"
   -h, --help              显示帮助
   
   -c, --continue          继续这个 workspace 最近的会话（任务描述作为追问）
+  -r, --resume            从这个 workspace 的会话列表里选一个继续
+      --session <id>      按 id 前缀继续指定的会话（-r 列表里显示的 8 位）
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
@@ -144,6 +148,8 @@ function parseCliArgs() {
       // 选项名里有连字符，所以必须加引号
 
       continue: { type: "boolean", short: "c" },
+      resume: { type: "boolean", short: "r" },
+      session: { type: "string" },
 
     },
   });
@@ -165,6 +171,16 @@ const { values, positionals } = args;
 if (values.help) {
   console.log(HELP);
   process.exit(0);
+}
+
+const sessionModes = [
+  values.continue,
+  values.resume,
+  values.session !== undefined,
+].filter(Boolean).length;
+
+if (sessionModes > 1) {
+  fail("-c、-r、--session 只能选一个。");
 }
 
 const task = positionals.join(" ").trim();
@@ -272,51 +288,174 @@ if (gitStatus.stdout.trim().length > 0) {
 
 // ---------- Session ----------
 
-function openSession(): {
-  writer: SessionWriter;
-  restored?: RebuiltSession;
-} {
-  if (values.continue) {
-    const path =
-      findMostRecentSession(getSessionDir(workspaceRoot));
+const MAX_LISTED_SESSIONS = 20;
 
-    if (path) {
-      try {
-        const loaded = loadSession(path);
 
-        return {
-          writer: createSessionWriter({
-            path,
-            header: loaded.header,
-            entries: loaded.entries,
-          }),
-          restored: rebuildSession(loaded.entries),
-        };
-      } catch (error) {
-        fail(
-          `无法继续会话 ${path}：${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+function oneLine(
+  text: string,
+  max = 60,
+): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+
+function formatTime(
+  date: Date,
+): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+
+async function pickSession(
+  sessions: SessionSummary[],
+): Promise<string> {
+  if (sessions.length === 0) {
+    fail("这个 workspace 还没有会话记录。");
+  }
+
+  if (!process.stdin.isTTY) {
+    fail("-r 需要在交互式终端里使用；也可以用 --session <id> 指定会话。");
+  }
+
+  const shown = sessions.slice(0, MAX_LISTED_SESSIONS);
+
+  console.log(`\n${workspaceRoot} 的会话（最近活动的在前）：\n`);
+
+  shown.forEach((session, index) => {
+    console.log(
+      `[${index + 1}] ${formatTime(session.modified)}  ${session.id.slice(0, 8)}  ${session.messageCount} 条消息${session.compacted ? "，已压缩" : ""}`,
+    );
+    console.log(`    首条：${oneLine(session.firstUserText)}`);
+
+    if (session.lastUserText !== session.firstUserText) {
+      console.log(`    最后：${oneLine(session.lastUserText)}`);
     }
+  });
 
-    console.warn(
-      "这个 workspace 还没有会话记录，开始新会话。\n",
+  if (sessions.length > shown.length) {
+    console.log(
+      `\n（还有 ${sessions.length - shown.length} 个更早的会话没有列出，可以用 --session <id> 指定）`,
     );
   }
 
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  // 这时 Agent 还没创建：Ctrl+C 直接退出
+  rl.on("SIGINT", () => {
+    rl.close();
+    console.log("\n已取消。");
+    process.exit(130);
+  });
+
+  const closed = new Promise<string>((resolvePromise) => {
+    rl.once("close", () => resolvePromise(""));
+  });
+
+  let answer: string;
+
+  try {
+    answer = await Promise.race([
+      rl
+        .question("\n继续哪一个？输入编号（直接回车取消）：")
+        .catch(() => ""),
+      closed,
+    ]);
+  } finally {
+    rl.close();
+  }
+
+  const choice = Number(answer.trim());
+  const picked = Number.isInteger(choice) ? shown[choice - 1] : undefined;
+
+  if (!picked) {
+    console.log("已取消。");
+    process.exit(0);
+  }
+
+  return picked.path;
+}
+
+
+/** 按 -c / --session / -r 找到要继续的会话；都没有就返回 undefined（新会话） */
+async function chooseSessionPath(): Promise<string | undefined> {
+  const dir = getSessionDir(workspaceRoot);
+
+  if (values.continue) {
+    return findMostRecentSession(dir);
+  }
+
+  if (values.session !== undefined) {
+    const prefix = values.session;
+
+    const matches = listSessions(dir).filter(
+      (session) => session.id.startsWith(prefix),
+    );
+
+    if (matches.length === 0) {
+      fail(`这个 workspace 没有 id 以 ${prefix} 开头的会话。用 -r 查看列表。`);
+    }
+
+    if (matches.length > 1) {
+      fail(`有 ${matches.length} 个会话的 id 以 ${prefix} 开头，请多写几位。`);
+    }
+
+    return matches[0]?.path;
+  }
+
+  if (values.resume) {
+    return pickSession(listSessions(dir));
+  }
+
+  return undefined;
+}
+
+
+async function openSession(): Promise<{
+  writer: SessionWriter;
+  restored?: RebuiltSession;
+}> {
+  const path = await chooseSessionPath();
+
+  if (path) {
+    try {
+      const loaded = loadSession(path);
+
+      return {
+        writer: createSessionWriter({
+          path,
+          header: loaded.header,
+          entries: loaded.entries,
+        }),
+        restored: rebuildSession(loaded.entries),
+      };
+    } catch (error) {
+      fail(
+        `无法继续会话 ${path}：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (values.continue) {
+    console.warn("这个 workspace 还没有会话记录，开始新会话。\n");
+  }
+
   return {
-    writer: createSessionWriter(
-      newSessionFile(workspaceRoot),
-    ),
+    writer: createSessionWriter(newSessionFile(workspaceRoot)),
   };
 }
+
 
 const {
   writer: sessionWriter,
   restored,
-} = openSession();
+} = await openSession();
 
 
 // ---------- Ctrl+C ----------

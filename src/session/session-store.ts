@@ -35,6 +35,11 @@ import type {
 } from "../context/compaction.js";
 
 
+import {
+  textOf,
+} from "../context/token-estimate.js";
+
+
 export const SESSION_VERSION = 1;
 
 export const DEFAULT_SESSIONS_ROOT =
@@ -117,23 +122,81 @@ export function getSessionDir(
 }
 
 
-/** 按文件修改时间取最近活动的 Session */
+export type SessionSummary = {
+  path: string;
+  id: string;
+
+  /** 最后活动时间（文件 mtime，和 -c 的选择依据一致） */
+  modified: Date;
+
+  messageCount: number;
+  firstUserText: string;
+  lastUserText: string;
+  compacted: boolean;
+};
+
+
+/**
+ * 列出目录里的会话，最近活动的在前。
+ * 只读：列表不能修改文件（loadSession 补换行会改变 mtime，进而改变排序）。
+ * Session 多了以后可以改成只读 header + 流式读取（Pi 的做法）。
+ */
+export function listSessions(
+  dir: string,
+): SessionSummary[] {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  const summaries: SessionSummary[] = [];
+
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".jsonl")) {
+      continue;
+    }
+
+    const path = join(dir, name);
+
+    try {
+      const modified = statSync(path).mtime;
+
+      const { header, entries } =
+        parseSessionText(path, readFileSync(path, "utf8"));
+
+      const userTexts = entries.flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "user"
+          ? [textOf(entry.message.content)]
+          : [],
+      );
+
+      summaries.push({
+        path,
+        id: header.id,
+        modified,
+        messageCount:
+          entries.filter((entry) => entry.type === "message").length,
+        firstUserText: userTexts[0] ?? "",
+        lastUserText: userTexts.at(-1) ?? "",
+        compacted:
+          entries.some((entry) => entry.type === "compaction"),
+      });
+    } catch {
+      // 损坏的文件或不是 Session 的文件：不列出，也不影响其他会话
+    }
+  }
+
+  return summaries.sort(
+    (left, right) =>
+      right.modified.getTime() - left.modified.getTime(),
+  );
+}
+
+
+/** 最近活动的会话（-c 用） */
 export function findMostRecentSession(
   dir: string,
 ): string | undefined {
-  if (!existsSync(dir)) {
-    return undefined;
-  }
-
-  return readdirSync(dir)
-    .filter((name) => name.endsWith(".jsonl"))
-    .map((name) => join(dir, name))
-    .map((path) => ({
-      path,
-      mtime: statSync(path).mtimeMs,
-    }))
-    .sort((left, right) => right.mtime - left.mtime)[0]
-    ?.path;
+  return listSessions(dir)[0]?.path;
 }
 
 
@@ -164,10 +227,11 @@ export function newSessionFile(
 
 // ---------- 读 ----------
 
-export function loadSession(
+/** 解析 Session 文件内容（不修改文件）；不是 Session 文件就抛错 */
+function parseSessionText(
   path: string,
-): LoadedSession {
-  const text = readFileSync(path, "utf8");
+  text: string,
+): { header: SessionHeader; entries: SessionEntry[] } {
   const parsed: unknown[] = [];
 
   for (const line of text.split("\n")) {
@@ -178,20 +242,29 @@ export function loadSession(
     try {
       parsed.push(JSON.parse(line));
     } catch {
-      // 跳过写到一半等无法解析的行。
+      // 写到一半的行（进程被强制结束）：跳过
     }
   }
 
   const [header, ...entries] =
     parsed as [SessionHeader | undefined, ...SessionEntry[]];
 
-  // as 不会检查或转换实际数据。 它只是告诉编译器按这个类型理解；数据是否符合 Session 格式，仍需要代码验证
-
   if (!header || header.type !== "session") {
     throw new Error(`Not a session file: ${path}`);
   }
 
-  // 隔开末尾的半行，避免下一次追加接在它后面。
+  return { header, entries };
+}
+
+
+export function loadSession(
+  path: string,
+): LoadedSession {
+  const text = readFileSync(path, "utf8");
+  const { header, entries } = parseSessionText(path, text);
+
+  // 最后一行没写完：补一个换行。
+  // 否则下一条会接在半行后面，两行一起坏。
   if (text.length > 0 && !text.endsWith("\n")) {
     appendFileSync(path, "\n");
   }

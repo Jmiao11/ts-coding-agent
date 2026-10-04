@@ -5,6 +5,12 @@ import {
 } from "node:fs/promises";
 
 import {
+  readFileSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
+
+import {
   tmpdir,
 } from "node:os";
 
@@ -39,6 +45,8 @@ import {
 
 import {
   createSessionWriter,
+  getSessionDir,
+  listSessions,
   loadSession,
   newSessionFile,
   rebuildSession,
@@ -427,5 +435,62 @@ describe("sanitizeForLlm", () => {
     });
 
     expect(sanitizeForLlm(sanitized)).toEqual(sanitized);
+  });
+});
+
+
+describe("listSessions", () => {
+  it("lists sessions newest first without modifying any file", async () => {
+    root = await mkdtemp(join(tmpdir(), "agent-session-"));
+    const sessionsRoot = join(root, "sessions");
+
+    const older = newSessionFile(root, sessionsRoot);
+
+    createSessionWriter(older).appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "第一个任务" }],
+      timestamp: 1,
+    });
+
+    // 最后一行写到一半：列表时不能顺手修复，那会改变 mtime 和排序
+    await appendFile(older.path, '{"type":"message","id":"brok');
+
+    const newer = newSessionFile(root, sessionsRoot);
+    const writer = createSessionWriter(newer);
+
+    writer.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "修 README" }],
+      timestamp: 2,
+    });
+
+    writer.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "再改 prompt" }],
+      timestamp: 3,
+    });
+
+    utimesSync(older.path, new Date("2026-01-01"), new Date("2026-01-01"));
+    utimesSync(newer.path, new Date("2026-01-02"), new Date("2026-01-02"));
+
+    const olderText = readFileSync(older.path, "utf8");
+    const olderMtime = statSync(older.path).mtimeMs;
+
+    const sessions = listSessions(getSessionDir(root, sessionsRoot));
+
+    expect(sessions.map((session) => session.id)).toEqual([
+      newer.header.id,
+      older.header.id,
+    ]);
+
+    expect(sessions[0]).toMatchObject({
+      messageCount: 2,
+      firstUserText: "修 README",
+      lastUserText: "再改 prompt",
+      compacted: false,
+    });
+
+    expect(readFileSync(older.path, "utf8")).toBe(olderText);
+    expect(statSync(older.path).mtimeMs).toBe(olderMtime);
   });
 });
