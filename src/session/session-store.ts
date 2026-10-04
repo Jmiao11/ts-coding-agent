@@ -26,6 +26,14 @@ import type {
   AgentMessage,
 } from "../agent/types.js";
 
+import type {
+  Usage,
+} from "../ai/types.js";
+
+import type {
+  CompactionCheckpoint,
+} from "../context/compaction.js";
+
 
 export const SESSION_VERSION = 1;
 
@@ -62,8 +70,30 @@ export type MessageEntry = EntryBase & {
 };
 
 
-// S2 再加入 CompactionEntry。
-export type SessionEntry = MessageEntry;
+/** 压缩记录；总结不作为普通 message 保存 */
+export type CompactionEntry = EntryBase & {
+  type: "compaction";
+
+  summary: string;
+  firstKeptEntryId: string;
+
+  /** 原样保留的起始 user 消息；没有时为 null */
+  turnStartEntryId: string | null;
+
+  tokensBefore: number;
+
+  details: {
+    readFiles: string[];
+    modifiedFiles: string[];
+  };
+
+  usage?: Usage;
+};
+
+
+export type SessionEntry =
+  | MessageEntry
+  | CompactionEntry;
 
 
 export type LoadedSession = {
@@ -170,6 +200,75 @@ export function loadSession(
 }
 
 
+// ---------- 重建 ----------
+
+export type RebuiltSession = {
+  /** 完整 transcript */
+  messages: AgentMessage[];
+
+  /** messageIds[i] 对应 messages[i] */
+  messageIds: string[];
+
+  checkpoint?: CompactionCheckpoint;
+};
+
+
+/** 当前只处理线性 Session，按文件顺序重建 */
+export function rebuildSession(
+  entries: SessionEntry[],
+): RebuiltSession {
+  const messages: AgentMessage[] = [];
+  const messageIds: string[] = [];
+
+  let latest: CompactionEntry | undefined;
+  let trustUsageFrom = 0;
+
+  for (const entry of entries) {
+    if (entry.type === "message") {
+      messages.push(entry.message);
+      messageIds.push(entry.id);
+    } else if (entry.type === "compaction") {
+      latest = entry;
+      trustUsageFrom = messages.length;
+    }
+  }
+
+  if (!latest) {
+    return { messages, messageIds };
+  }
+
+  const firstKeptIndex =
+    messageIds.indexOf(latest.firstKeptEntryId);
+
+  const turnStartIndex =
+    latest.turnStartEntryId === null
+      ? -1
+      : messageIds.indexOf(latest.turnStartEntryId);
+
+  if (
+    firstKeptIndex < 0
+    || (latest.turnStartEntryId !== null && turnStartIndex < 0)
+  ) {
+    throw new Error(
+      `Compaction entry ${latest.id} points to a missing message.`,
+    );
+  }
+
+  return {
+    messages,
+    messageIds,
+    checkpoint: {
+      modelSummary: latest.summary,
+      firstKeptIndex,
+      turnStartIndex,
+      trustUsageFrom,
+      readFiles: latest.details.readFiles,
+      modifiedFiles: latest.details.modifiedFiles,
+    },
+  };
+}
+
+
 // ---------- 写 ----------
 
 function generateId(
@@ -192,6 +291,11 @@ export type SessionWriter = {
 
   /** 追加一条消息，返回条目 ID */
   appendMessage(message: AgentMessage): string;
+
+  appendCompaction(
+    checkpoint: CompactionCheckpoint,
+    extra: { tokensBefore: number; usage?: Usage },
+  ): string;
 };
 
 
@@ -205,6 +309,13 @@ export function createSessionWriter(
   const ids = new Set(
     options.entries?.map((entry) => entry.id),
   );
+
+  const messageIds = (options.entries ?? [])
+    .filter(
+      (entry): entry is MessageEntry =>
+        entry.type === "message",
+    )
+    .map((entry) => entry.id);
 
   let lastId = options.entries?.at(-1)?.id ?? null;
   let created = existsSync(options.path);
@@ -228,6 +339,9 @@ export function createSessionWriter(
       options.path,
       `${JSON.stringify(entry)}\n`,
     );
+
+    ids.add(entry.id);
+    lastId = entry.id;
   }
 
   return {
@@ -243,9 +357,52 @@ export function createSessionWriter(
       };
 
       write(entry);
+      messageIds.push(entry.id);
 
-      ids.add(entry.id);
-      lastId = entry.id;
+      return entry.id;
+    },
+
+    appendCompaction(checkpoint, extra) {
+      if (checkpoint.trustUsageFrom !== messageIds.length) {
+        throw new Error(
+          `Session out of sync: ${messageIds.length} messages written, compaction saw ${checkpoint.trustUsageFrom}.`,
+        );
+      }
+
+      const firstKeptEntryId =
+        messageIds[checkpoint.firstKeptIndex];
+
+      const turnStartEntryId =
+        checkpoint.turnStartIndex >= 0
+          ? messageIds[checkpoint.turnStartIndex]
+          : null;
+
+      if (
+        firstKeptEntryId === undefined
+        || turnStartEntryId === undefined
+      ) {
+        throw new Error(
+          "Compaction checkpoint points outside the session.",
+        );
+      }
+
+      const entry: CompactionEntry = {
+        type: "compaction",
+        id: generateId(ids),
+        parentId: lastId,
+        timestamp: new Date().toISOString(),
+        summary: checkpoint.modelSummary,
+        firstKeptEntryId,
+        turnStartEntryId,
+        tokensBefore: extra.tokensBefore,
+        details: {
+          readFiles: checkpoint.readFiles,
+          modifiedFiles: checkpoint.modifiedFiles,
+        },
+        ...(extra.usage ? { usage: extra.usage } : {}),
+      };
+
+      write(entry);
 
       return entry.id;
     },

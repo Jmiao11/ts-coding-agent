@@ -221,6 +221,25 @@ export type CompactionSettings = {
 };
 
 
+/**
+ * 可序列化的压缩状态。
+ * 下标指向完整 transcript，Session 层负责与条目 ID 换算。
+ */
+export type CompactionCheckpoint = {
+  modelSummary: string;
+  firstKeptIndex: number;
+
+  /** -1 表示没有需要原样保留的起始 user 消息 */
+  turnStartIndex: number;
+
+  /** 压缩时 transcript 长度，此下标起的 usage 才可信 */
+  trustUsageFrom: number;
+
+  readFiles: string[];
+  modifiedFiles: string[];
+};
+
+
 export type CompactionEvent = {
   tokensBefore: number;
   estimatedTokensAfter: number;
@@ -231,6 +250,8 @@ export type CompactionEvent = {
   /** 总结请求次数：1 = 一次成功；2 = 第一次被截断，重试后成功 */
   attempts: number;
   usage?: Usage;
+  /** 压缩后的状态，交给 Session 持久化 */
+  checkpoint: CompactionCheckpoint;
 };
 
 
@@ -242,6 +263,9 @@ export type CompactorOptions = {
   onEstimate?: (tokens: number, threshold: number) => void;
   onCompaction?: (event: CompactionEvent) => void;
   onError?: (error: unknown) => void;
+
+  /** 从 Session 恢复时传入 */
+  initialCheckpoint?: CompactionCheckpoint | undefined;
 };
 
 
@@ -390,6 +414,42 @@ function createSummaryMessage(
 }
 
 
+function stateFromCheckpoint(
+  checkpoint: CompactionCheckpoint,
+): CompactionState {
+  const readFiles = new Set(checkpoint.readFiles);
+  const modifiedFiles = new Set(checkpoint.modifiedFiles);
+
+  return {
+    modelSummary: checkpoint.modelSummary,
+    summaryMessage: createSummaryMessage({
+      modelSummary: checkpoint.modelSummary,
+      readFiles,
+      modifiedFiles,
+    }),
+    firstKeptIndex: checkpoint.firstKeptIndex,
+    turnStartIndex: checkpoint.turnStartIndex,
+    trustUsageFrom: checkpoint.trustUsageFrom,
+    readFiles,
+    modifiedFiles,
+  };
+}
+
+
+function checkpointOf(
+  state: CompactionState,
+): CompactionCheckpoint {
+  return {
+    modelSummary: state.modelSummary,
+    firstKeptIndex: state.firstKeptIndex,
+    turnStartIndex: state.turnStartIndex,
+    trustUsageFrom: state.trustUsageFrom,
+    readFiles: [...state.readFiles],
+    modifiedFiles: [...state.modifiedFiles],
+  };
+}
+
+
 function sumTokens(
   messages: AgentMessage[],
 ): number {
@@ -435,7 +495,10 @@ export function createCompactor(
     settings.maxSummaryTokens
     ?? Math.floor(0.4 * settings.reserveTokens);
 
-  let state: CompactionState | undefined;
+  let state: CompactionState | undefined =
+    options.initialCheckpoint
+      ? stateFromCheckpoint(options.initialCheckpoint)
+      : undefined;
 
 
   function buildView(
@@ -645,7 +708,7 @@ export function createCompactor(
 
         collectFiles(toSummarize, readFiles, modifiedFiles);
 
-        state = {
+        const nextState: CompactionState = {
           modelSummary: result.text,
           summaryMessage: createSummaryMessage({
             modelSummary: result.text,
@@ -659,11 +722,14 @@ export function createCompactor(
           modifiedFiles,
         };
 
+        state = nextState;
+
         const newView = buildView(messages);
 
         options.onCompaction?.({
           summary: result.text,
           attempts: result.attempts,
+          checkpoint: checkpointOf(nextState),
           tokensBefore: tokens,
           estimatedTokensAfter: sumTokens(newView),
           summarizedMessages: toSummarize.length,

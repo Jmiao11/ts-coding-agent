@@ -385,6 +385,19 @@ const compactor = createCompactor({
     console.log(
       `----- summary -----\n${event.summary}\n-------------------\n`,
     );
+
+    try {
+      sessionWriter.appendCompaction(event.checkpoint, {
+        tokensBefore: event.tokensBefore,
+        ...(event.usage ? { usage: event.usage } : {}),
+      });
+    } catch (error) {
+      console.error(
+        `[session] 压缩记录写入失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   },
 
   onError(error) {

@@ -21,12 +21,27 @@ import {
 
 import type {
   AgentMessage,
+  StreamFn,
 } from "../src/agent/types.js";
+
+import type {
+  AssistantMessage,
+} from "../src/ai/types.js";
+
+import {
+  createAssistantMessageEventStream,
+} from "../src/ai/event-stream.js";
+
+import {
+  createCompactor,
+  type CompactionEvent,
+} from "../src/context/compaction.js";
 
 import {
   createSessionWriter,
   loadSession,
   newSessionFile,
+  rebuildSession,
 } from "../src/session/session-store.js";
 
 
@@ -105,7 +120,7 @@ describe("session store", () => {
     expect(loaded.header).toEqual(header);
 
     expect(
-      loaded.entries.map((entry) => entry.message),
+      rebuildSession(loaded.entries).messages,
     ).toEqual(messages);
 
     expect(
@@ -158,5 +173,183 @@ describe("session store", () => {
 
     expect(reloaded.entries[1]?.parentId)
       .toBe(loaded.entries[0]?.id);
+  });
+});
+
+
+// ---------- S2：压缩状态的持久化 ----------
+
+const fakeModel = {
+  id: "fake",
+  provider: "fake",
+  name: "Fake",
+  contextWindow: 1000,
+  maxTokens: 100,
+};
+
+const compactionSettings = {
+  contextWindow: 1000,
+  reserveTokens: 200,
+  keepRecentTokens: 300,
+};
+
+
+function countingSummarizer() {
+  let calls = 0;
+
+  const streamFn: StreamFn = () => {
+    calls += 1;
+
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: `SUMMARY-${calls}`,
+      }],
+      provider: "fake",
+      model: "fake",
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "start", partial: message });
+    stream.push({ type: "done", reason: "stop", message });
+    stream.end();
+
+    return stream;
+  };
+
+  return { streamFn, calls: () => calls };
+}
+
+
+function callRead(
+  path: string,
+  usage?: { input: number; output: number },
+): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{
+      type: "toolCall",
+      id: `call-${path}`,
+      name: "read_file",
+      arguments: { path },
+    }],
+    provider: "fake",
+    model: "fake",
+    stopReason: "toolUse",
+    ...(usage ? { usage } : {}),
+    timestamp: 1,
+  };
+}
+
+
+function readResult(path: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: `call-${path}`,
+    toolName: "read_file",
+    content: [{
+      type: "text",
+      text: "x".repeat(400),
+    }],
+    isError: false,
+    timestamp: 1,
+  };
+}
+
+
+function withoutTimestamps(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  return messages.map(
+    (message) => ({ ...message, timestamp: 0 }),
+  );
+}
+
+
+describe("session + compaction", () => {
+  it("restores the same compacted view from the file, including which usage is stale", async () => {
+    const { path, header } = await createSession();
+    const writer = createSessionWriter({ path, header });
+    const summarizer = countingSummarizer();
+    const events: CompactionEvent[] = [];
+
+    const compactor = createCompactor({
+      model: fakeModel,
+      streamFn: summarizer.streamFn,
+      settings: compactionSettings,
+      onCompaction: (event) => {
+        events.push(event);
+
+        writer.appendCompaction(event.checkpoint, {
+          tokensBefore: event.tokensBefore,
+        });
+      },
+    });
+
+    const messages: AgentMessage[] = [];
+
+    const push = (message: AgentMessage): void => {
+      messages.push(message);
+      writer.appendMessage(message);
+    };
+
+    push({
+      role: "user",
+      content: "任务：只读",
+      timestamp: 1,
+    });
+
+    for (let index = 0; index < 8; index += 1) {
+      push(
+        callRead(`f${index}.ts`, {
+          input: 100 + index * 110,
+          output: 10,
+        }),
+      );
+
+      push(readResult(`f${index}.ts`));
+    }
+
+    await compactor.transformContext(messages);
+    expect(events).toHaveLength(1);
+
+    // 压缩后新增消息，但没有新的可信 usage。
+    for (const name of ["g0.ts", "g1.ts"]) {
+      push(callRead(name));
+      push(readResult(name));
+    }
+
+    const liveView =
+      await compactor.transformContext(messages);
+
+    expect(summarizer.calls()).toBe(1);
+
+    // 从磁盘加载，重新建立完整 transcript 和 checkpoint。
+    const rebuilt =
+      rebuildSession(loadSession(path).entries);
+
+    expect(rebuilt.messages).toEqual(messages);
+    expect(rebuilt.checkpoint).toEqual(events[0]?.checkpoint);
+
+    const restoredSummarizer = countingSummarizer();
+
+    const restored = createCompactor({
+      model: fakeModel,
+      streamFn: restoredSummarizer.streamFn,
+      settings: compactionSettings,
+      initialCheckpoint: rebuilt.checkpoint,
+    });
+
+    const restoredView =
+      await restored.transformContext(rebuilt.messages);
+
+    expect(withoutTimestamps(restoredView)).toEqual(
+      withoutTimestamps(liveView),
+    );
+
+    expect(restoredSummarizer.calls()).toBe(0);
   });
 });
