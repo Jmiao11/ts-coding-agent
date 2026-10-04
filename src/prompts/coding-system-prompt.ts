@@ -51,8 +51,5 @@ export function createCodingSystemPrompt(
    // 预防（真实项目）：改动由用户用 git diff 审查
    "- Do not run git commands that change history, branches or remotes (commit, push, reset, checkout, rebase, clean). The user reviews your changes with git diff.",
 
-   // 观察：叙述用英文，结论用中文
-   "- Always reply in the same language the user used.",
-
   ].join("\n");
 }

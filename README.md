@@ -41,6 +41,7 @@ pnpm build
 | `AGENT_API_KEY` | 必需 | 作为 `Authorization: Bearer <key>` 发给模型 API |
 | `AGENT_BASE_URL` | 必需 | API 基础地址；CLI 请求 `${AGENT_BASE_URL}/chat/completions`（结尾的 `/` 会被去掉） |
 | `AGENT_MODEL` | 不传 `-m/--model` 时必需 | 模型 ID |
+| `AGENT_THINKING` | 可选 | 目前只接受 `disabled`：显式关掉 DeepSeek 的 thinking（不设置就什么都不发）。其他值会直接报错退出 |
 
 文件内容示例（将 API 地址、模型 ID 和占位 Key 替换为你自己的配置）：
 
@@ -116,6 +117,7 @@ agent-harness -m deepseek-chat "跑一遍测试，并说明失败原因"
 | `-w, --workspace <dir>` | 工作目录，默认当前目录。目录必须存在，而且必须在 Git 仓库里 |
 | `-m, --model <id>` | 模型 ID，覆盖 `AGENT_MODEL` |
 | `--env-file <path>` | API 配置文件，默认主目录的 `.agent-harness.env` |
+| `--context-window <n>` | 工作预算（不是模型上限），估算超过就压缩；默认 128000，调小可用来测试压缩。必须是不小于 8000 的整数 |
 | `-h, --help` | 显示帮助 |
 
 任务描述是位置参数：多个位置参数会用空格拼成一个任务；任务为空时打印帮助并以退出码 1 退出。所有文件工具的相对路径都相对 workspace 根目录，`run_command` 也在 workspace 根目录执行。
@@ -127,7 +129,7 @@ agent 可用的工具：`list_directory`、`read_file`、`search_text`、`write_
 - 启动时打印 `workspace` / `model` / `task`
 - 每轮结束时打印模型输出的 `[assistant] ...` 文本；`run_command` 的输出会单独成块打印
 - 结束时打印模型调用次数、执行过的工具名，以及 token 用量（`input` / `cachedInput` / `output` / `peakInput`）
-- 内置预算：最多 **30 次模型调用**、**50 次工具调用**，超出后停止并打印 `[stopped] ...`
+- 内置预算：最多 **50 次模型调用**、**120 次工具调用**，超出后停止并打印 `[stopped] ...`
 
 退出码：正常结束为 `0`（包括触发预算上限），被 Ctrl+C 中止为 `130`。第一次 Ctrl+C 会中止 agent 并杀掉正在运行的命令，再按一次强制退出。
 
