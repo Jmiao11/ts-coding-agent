@@ -312,7 +312,7 @@ export function createRunCommandTool(
 
       if (aborted) {
         throw new Error(
-          `Command aborted: ${parameters.command}`,
+          `Command stopped: the user interrupted the run before it finished: ${parameters.command}`,
         );
       }
 
