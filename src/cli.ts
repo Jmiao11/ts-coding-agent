@@ -854,10 +854,77 @@ async function runTask(
   taskCount += 1;
 }
 
+// ---------- 交互模式命令 ----------
+
+type ReplAction = "continue" | "exit";
+
+type ReplCommand = {
+  /** 第一个是主名称，其余是别名 */
+  names: string[];
+
+  usage?: string;
+  description: string;
+
+  run(args: string): ReplAction | Promise<ReplAction>;
+};
+
+const replCommands: ReplCommand[] = [
+  {
+    names: ["/help"],
+    description: "显示这份命令列表",
+    run() {
+      printReplHelp();
+      return "continue";
+    },
+  },
+  {
+    names: ["/exit", "/quit"],
+    description: "退出（在提示符处按 Ctrl+C 或 Ctrl+D 也可以）",
+    run() {
+      return "exit";
+    },
+  },
+];
+
+
+function findReplCommand(
+  name: string,
+): ReplCommand | undefined {
+  return replCommands.find(
+    (command) => command.names.includes(name),
+  );
+}
+
+
+function printReplHelp(): void {
+  const rows = replCommands.map((command) => ({
+    name: [command.names.join(", "), command.usage]
+      .filter(Boolean)
+      .join(" "),
+    description: command.description,
+  }));
+
+  const width = Math.max(
+    ...rows.map((row) => row.name.length),
+  );
+
+  console.log("\n命令：");
+
+  for (const row of rows) {
+    console.log(
+      `  ${row.name.padEnd(width)}  ${row.description}`,
+    );
+  }
+
+  console.log(
+    "\n其他非 / 开头的输入都作为任务发给 Agent。空行忽略；任务运行中按 Ctrl+C 只中止当前任务，连按两次强制退出。",
+  );
+}
+
 
 async function runRepl(): Promise<void> {
   console.log(
-    "\n交互模式：输入任务后回车运行；/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。",
+    "\n交互模式：输入任务后回车运行；/help 查看命令，/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。",
   );
 
   // 继续会话时，先让用户确认接的是哪个会话
@@ -884,8 +951,25 @@ async function runRepl(): Promise<void> {
       continue;
     }
 
-    if (input === "/exit") {
-      break;
+    if (input.startsWith("/")) {
+      const name =
+        (input.split(/\s+/, 1)[0] ?? "").toLowerCase();
+
+      const args = input.slice(name.length).trim();
+      const command = findReplCommand(name);
+
+      if (!command) {
+        console.log(
+          `未知命令：${name}。输入 /help 查看可用命令。`,
+        );
+        continue;
+      }
+
+      if ((await command.run(args)) === "exit") {
+        break;
+      }
+
+      continue;
     }
 
     await runTask(input);
