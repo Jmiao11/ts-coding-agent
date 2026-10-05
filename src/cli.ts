@@ -107,6 +107,10 @@ import {
   createWriteFileTool,
 } from "./tools/write-file.js";
 
+import type {
+  AgentMessage,
+} from "./agent/types.js";
+
 
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
@@ -365,50 +369,88 @@ async function promptLine(
 const MAX_LISTED_SESSIONS = 20;
 
 
+/** 取消时返回 undefined，由调用方决定如何处理 */
 async function pickSession(
   sessions: SessionSummary[],
-): Promise<string> {
-  if (sessions.length === 0) {
-    fail("这个 workspace 还没有会话记录。");
-  }
-
-  if (!process.stdin.isTTY) {
-    fail("-r 需要在交互式终端里使用；也可以用 --session <id> 指定会话。");
-  }
-
+): Promise<string | undefined> {
   const shown = sessions.slice(0, MAX_LISTED_SESSIONS);
 
-  console.log(`\n${workspaceRoot} 的会话（最近活动的在前）：\n`);
+  console.log(
+    `\n${workspaceRoot} 的会话（最近活动的在前）：\n`,
+  );
 
   shown.forEach((session, index) => {
     console.log(
       `[${index + 1}] ${formatTime(session.modified)}  ${session.id.slice(0, 8)}  ${session.messageCount} 条消息${session.compacted ? "，已压缩" : ""}`,
     );
-    console.log(`    首条：${oneLine(session.firstUserText)}`);
+
+    console.log(
+      `    首条：${oneLine(session.firstUserText)}`,
+    );
 
     if (session.lastUserText !== session.firstUserText) {
-      console.log(`    最后：${oneLine(session.lastUserText)}`);
+      console.log(
+        `    最后：${oneLine(session.lastUserText)}`,
+      );
     }
   });
 
   if (sessions.length > shown.length) {
     console.log(
-      `\n（还有 ${sessions.length - shown.length} 个更早的会话没有列出，可以用 --session <id> 指定）`,
+      `\n（还有 ${sessions.length - shown.length} 个更早的会话没有列出，可以按 id 前缀指定：/resume <id> 或 --session <id>）`,
     );
   }
 
-  const answer = await promptLine("\n继续哪一个？输入编号（直接回车取消）：");
+  const answer = await promptLine(
+    "\n继续哪一个？输入编号（直接回车取消）：",
+  );
+
   const choice = Number(answer?.trim() ?? "");
-  const picked = Number.isInteger(choice) ? shown[choice - 1] : undefined;
 
-  if (!picked) {
-    console.log("已取消。");
-    process.exit(0);
-  }
-
-  return picked.path;
+  return Number.isInteger(choice)
+    ? shown[choice - 1]?.path
+    : undefined;
 }
 
+
+/** 匹配失败时返回说明文字 */
+function matchSessionPrefix(
+  sessions: SessionSummary[],
+  prefix: string,
+): SessionSummary | string {
+  const matches = sessions.filter(
+    (session) => session.id.startsWith(prefix),
+  );
+
+  const [first, ...others] = matches;
+
+  if (!first) {
+    return `这个 workspace 没有 id 以 ${prefix} 开头的会话。用 -r 或 /resume 查看列表。`;
+  }
+
+  if (others.length > 0) {
+    return `有 ${matches.length} 个会话的 id 以 ${prefix} 开头，请多写几位。`;
+  }
+
+  return first;
+}
+
+
+/** 恢复 writer、完整消息和 checkpoint */
+function resumeSessionFile(
+  path: string,
+): { writer: SessionWriter; restored: RebuiltSession } {
+  const loaded = loadSession(path);
+
+  return {
+    writer: createSessionWriter({
+      path,
+      header: loaded.header,
+      entries: loaded.entries,
+    }),
+    restored: rebuildSession(loaded.entries),
+  };
+}
 
 /** 按 -c / --session / -r 找到要继续的会话；都没有就返回 undefined（新会话） */
 async function chooseSessionPath(): Promise<string | undefined> {
@@ -419,25 +461,39 @@ async function chooseSessionPath(): Promise<string | undefined> {
   }
 
   if (values.session !== undefined) {
-    const prefix = values.session;
-
-    const matches = listSessions(dir).filter(
-      (session) => session.id.startsWith(prefix),
+    const match = matchSessionPrefix(
+      listSessions(dir),
+      values.session,
     );
 
-    if (matches.length === 0) {
-      fail(`这个 workspace 没有 id 以 ${prefix} 开头的会话。用 -r 查看列表。`);
+    if (typeof match === "string") {
+      fail(match);
     }
 
-    if (matches.length > 1) {
-      fail(`有 ${matches.length} 个会话的 id 以 ${prefix} 开头，请多写几位。`);
-    }
-
-    return matches[0]?.path;
+    return match.path;
   }
 
   if (values.resume) {
-    return pickSession(listSessions(dir));
+    const sessions = listSessions(dir);
+
+    if (sessions.length === 0) {
+      fail("这个 workspace 还没有会话记录。");
+    }
+
+    if (!process.stdin.isTTY) {
+      fail(
+        "-r 需要在交互式终端里使用；也可以用 --session <id> 指定会话。",
+      );
+    }
+
+    const picked = await pickSession(sessions);
+
+    if (!picked) {
+      console.log("已取消。");
+      process.exit(0);
+    }
+
+    return picked;
   }
 
   return undefined;
@@ -452,16 +508,7 @@ async function openSession(): Promise<{
 
   if (path) {
     try {
-      const loaded = loadSession(path);
-
-      return {
-        writer: createSessionWriter({
-          path,
-          header: loaded.header,
-          entries: loaded.entries,
-        }),
-        restored: rebuildSession(loaded.entries),
-      };
+      return resumeSessionFile(path);
     } catch (error) {
       fail(
         `无法继续会话 ${path}：${error instanceof Error ? error.message : String(error)}`,
@@ -890,6 +937,38 @@ type ReplCommand = {
   run(args: string): ReplAction | Promise<ReplAction>;
 };
 
+function printPreviousSession(
+  previous: SessionWriter,
+): void {
+  if (!existsSync(previous.path)) {
+    return;
+  }
+
+  const id = previous.id.slice(0, 8);
+
+  console.log(`上一个会话：${previous.path}`);
+
+  console.log(
+    `回到它：/resume ${id}（或退出后 agent-harness --session ${id}）`,
+  );
+}
+
+
+function printLastUserMessage(
+  messages: AgentMessage[],
+): void {
+  const lastUser = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (lastUser?.role === "user") {
+    console.log(
+      `上次的最后一条：${oneLine(textOf(lastUser.content))}`,
+    );
+  }
+}
+
+
 const replCommands: ReplCommand[] = [
   {
     names: ["/help"],
@@ -912,10 +991,87 @@ const replCommands: ReplCommand[] = [
 
       console.log("\n已开始新会话（写入第一条消息时才创建文件）。");
 
-      if (existsSync(previous.path)) {
-        console.log(`上一个会话：${previous.path}`);
-        console.log(`回到它：agent-harness --session ${previous.id.slice(0, 8)}`);
+      printPreviousSession(previous);
+
+      return "continue";
+    },
+  },
+  {
+    names: ["/resume"],
+    usage: "[id前缀]",
+    description: "切换到这个 workspace 的另一个会话（不写 id 就从列表里选）",
+
+    async run(args): Promise<ReplAction> {
+      const sessions =
+        listSessions(getSessionDir(workspaceRoot));
+
+      let path: string | undefined;
+
+      if (args.length > 0) {
+        const match = matchSessionPrefix(sessions, args);
+
+        if (typeof match === "string") {
+          console.log(match);
+          return "continue";
+        }
+
+        path = match.path;
+      } else {
+        const others = sessions.filter(
+          (session) => session.path !== active.writer.path,
+        );
+
+        if (others.length === 0) {
+          console.log("没有其他会话可以切换。");
+          return "continue";
+        }
+
+        path = await pickSession(others);
+
+        if (!path) {
+          console.log("已取消。");
+          return "continue";
+        }
       }
+
+      if (path === active.writer.path) {
+        console.log("已经在这个会话里了。");
+        return "continue";
+      }
+
+      let next:
+        ReturnType<typeof resumeSessionFile> | undefined;
+
+      try {
+        next = resumeSessionFile(path);
+      } catch (error) {
+        console.log(
+          `无法打开会话 ${path}：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+
+      if (!next) {
+        return "continue";
+      }
+
+      const previous = active.writer;
+
+      agent.reset();
+      agent.state.messages = next.restored.messages.slice();
+
+      active = createActiveSession(
+        next.writer,
+        next.restored.checkpoint,
+      );
+
+      console.log(
+        `\n已切换到会话：${next.writer.path}（${next.restored.messages.length} 条消息${next.restored.checkpoint ? "，已压缩过" : ""}）`,
+      );
+
+      printPreviousSession(previous);
+      printLastUserMessage(next.restored.messages);
 
       return "continue";
     },
@@ -971,13 +1127,7 @@ async function runRepl(): Promise<void> {
   );
 
   // 继续会话时，先让用户确认接的是哪个会话
-  const lastUser = [...(restored?.messages ?? [])]
-    .reverse()
-    .find((message) => message.role === "user");
-
-  if (lastUser?.role === "user") {
-    console.log(`上次的最后一条：${oneLine(textOf(lastUser.content))}`);
-  }
+  printLastUserMessage(restored?.messages ?? []);
 
   while (true) {
     const line = await promptLine("\n> ");
