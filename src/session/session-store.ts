@@ -373,6 +373,9 @@ function generateId(
 export type SessionWriter = {
   readonly path: string;
 
+  /** Session header 中的会话 UUID */
+  readonly id: string;
+
   /** 追加一条消息，返回条目 ID */
   appendMessage(message: AgentMessage): string;
 
@@ -430,6 +433,7 @@ export function createSessionWriter(
 
   return {
     path: options.path,
+    id: options.header.id,
 
     appendMessage(message) {
       const entry: MessageEntry = {

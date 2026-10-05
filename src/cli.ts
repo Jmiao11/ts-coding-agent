@@ -41,6 +41,8 @@ import {
 
 import {
   createCompactor,
+  type CompactionCheckpoint,
+  type Compactor,
 } from "./context/compaction.js";
 
 import {
@@ -478,7 +480,7 @@ async function openSession(): Promise<{
 
 
 const {
-  writer: sessionWriter,
+  writer: initialWriter,
   restored,
 } = await openSession();
 
@@ -651,62 +653,82 @@ const streamFn = createOpenAICompatibleStreamFn({
     : {}),
 });
 
-// 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
-const compactor = createCompactor({
-  model,
-  streamFn,
-  settings: compactionSettings,
+// ---------- 当前会话 ----------
+// 会话文件和压缩状态属于同一个会话：/new（以后还有 /resume）换会话时一起换。
 
-  // 继续会话：从上次的压缩状态接着来
-  initialCheckpoint: restored?.checkpoint,
+type ActiveSession = {
+  writer: SessionWriter;
+  compactor: Compactor;
+};
 
-  onEstimate(tokens, threshold) {
-    console.log(`[context] est=${tokens} threshold=${threshold}`);
-  },
 
-  onCompaction(event) {
-    current.compactions += 1;
-    current.compactionInput += event.usage?.input ?? 0;
-    current.compactionOutput += event.usage?.output ?? 0;
+function createActiveSession(
+  writer: SessionWriter,
+  checkpoint?: CompactionCheckpoint,
+): ActiveSession {
+  // 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
+  const compactor = createCompactor({
+    model,
+    streamFn,
+    settings: compactionSettings,
 
-    console.log(
-      [
-        `\n[compaction #${total.compactions + current.compactions}]`,
-        `est ${event.tokensBefore} → ~${event.estimatedTokensAfter}`,
-        `summarized=${event.summarizedMessages}`,
-        `kept=${event.keptMessages}`,
-        ...(event.usage
-          ? [`summary in=${event.usage.input} out=${event.usage.output}`]
-          : []),
-        ...(event.attempts > 1
-          ? [`attempts=${event.attempts}（首次被截断，in/out 含两次）`]
-          : []),
-      ].join(" "),
-    );
+    // 继续会话：从上次的压缩状态接着来
+    initialCheckpoint: checkpoint,
 
-    console.log(
-      `----- summary -----\n${event.summary}\n-------------------\n`,
-    );
+    onEstimate(tokens, threshold) {
+      console.log(`[context] est=${tokens} threshold=${threshold}`);
+    },
 
-    // 写入失败不中断任务：恢复时没有这条记录，会退回到完整 transcript
-    try {
-      sessionWriter.appendCompaction(event.checkpoint, {
-        tokensBefore: event.tokensBefore,
-        ...(event.usage ? { usage: event.usage } : {}),
-      });
-    } catch (error) {
-      console.error(
-        `[session] 压缩记录写入失败：${error instanceof Error ? error.message : String(error)}`,
+    onCompaction(event) {
+      current.compactions += 1;
+      current.compactionInput += event.usage?.input ?? 0;
+      current.compactionOutput += event.usage?.output ?? 0;
+
+      console.log(
+        [
+          `\n[compaction #${total.compactions + current.compactions}]`,
+          `est ${event.tokensBefore} → ~${event.estimatedTokensAfter}`,
+          `summarized=${event.summarizedMessages}`,
+          `kept=${event.keptMessages}`,
+          ...(event.usage
+            ? [`summary in=${event.usage.input} out=${event.usage.output}`]
+            : []),
+          ...(event.attempts > 1
+            ? [`attempts=${event.attempts}（首次被截断，in/out 含两次）`]
+            : []),
+        ].join(" "),
       );
-    }
-  },
 
-  onError(error) {
-    console.error(
-      `\n[compaction failed] ${error instanceof Error ? error.message : String(error)}（本次不压缩，继续运行）\n`,
-    );
-  },
-});
+      console.log(
+        `----- summary -----\n${event.summary}\n-------------------\n`,
+      );
+
+      // 写进这个压缩器所属会话的文件（闭包里的 writer，不是 active.writer）。
+      // 写入失败不中断任务：恢复时没有这条记录，会退回到完整 transcript
+      try {
+        writer.appendCompaction(event.checkpoint, {
+          tokensBefore: event.tokensBefore,
+          ...(event.usage ? { usage: event.usage } : {}),
+        });
+      } catch (error) {
+        console.error(
+          `[session] 压缩记录写入失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+
+    onError(error) {
+      console.error(
+        `\n[compaction failed] ${error instanceof Error ? error.message : String(error)}（本次不压缩，继续运行）\n`,
+      );
+    },
+  });
+
+  return { writer, compactor };
+}
+
+
+let active = createActiveSession(initialWriter, restored?.checkpoint);
 
 
 // ---------- Agent ----------
@@ -740,7 +762,7 @@ const agent = new Agent({
     convertToLlm: sanitizeForLlm,
 
     transformContext: (messages, signal) =>
-      compactor.transformContext(messages, signal),
+      active.compactor.transformContext(messages, signal),
 
     extensions: [
       budget,
@@ -758,7 +780,7 @@ const agent = new Agent({
 agent.subscribe((event) => {
   // 只写完整消息；流式中的 partial 不写
   if (event.type === "message_end") {
-    sessionWriter.appendMessage(event.message);
+    active.writer.appendMessage(event.message);
   }
 
   if (event.type === "tool_execution_start") {
@@ -878,6 +900,27 @@ const replCommands: ReplCommand[] = [
     },
   },
   {
+    names: ["/new"],
+    description: "结束当前会话，开始一个新会话",
+    run() {
+      const previous = active.writer;
+
+      agent.reset();
+      active = createActiveSession(
+        createSessionWriter(newSessionFile(workspaceRoot)),
+      );
+
+      console.log("\n已开始新会话（写入第一条消息时才创建文件）。");
+
+      if (existsSync(previous.path)) {
+        console.log(`上一个会话：${previous.path}`);
+        console.log(`回到它：agent-harness --session ${previous.id.slice(0, 8)}`);
+      }
+
+      return "continue";
+    },
+  },
+  {
     names: ["/exit", "/quit"],
     description: "退出（在提示符处按 Ctrl+C 或 Ctrl+D 也可以）",
     run() {
@@ -988,8 +1031,8 @@ console.log("thinking:", thinking ?? "(provider default)");
 console.log(
   "session:",
   restored
-    ? `继续 ${sessionWriter.path}（${restored.messages.length} 条消息${restored.checkpoint ? "，已压缩过" : ""}）`
-    : sessionWriter.path,
+    ? `继续 ${active.writer.path}（${restored.messages.length} 条消息${restored.checkpoint ? "，已压缩过" : ""}）`
+    : active.writer.path,
 );
 console.log(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
@@ -1007,8 +1050,8 @@ if (interactive) {
 }
 
 // 新会话里一个任务都没跑的话，文件还没创建
-if (existsSync(sessionWriter.path)) {
-  console.log(`\n会话记录：${sessionWriter.path}`);
+if (existsSync(active.writer.path)) {
+  console.log(`\n会话记录：${active.writer.path}`);
   console.log("继续这个会话：agent-harness -c");
 }
 
