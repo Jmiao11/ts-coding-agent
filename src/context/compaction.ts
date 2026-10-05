@@ -290,6 +290,14 @@ export type Compactor = {
       customInstructions?: string | undefined;
     },
   ): Promise<CompactResult>;
+
+  /** 当前视图有多大：不调用模型、不改状态（/session 用） */
+  inspect(messages: AgentMessage[]): {
+    viewMessages: number;
+    estimatedTokens: number;
+    threshold: number;
+    compacted: boolean;
+  };
 };
 
 
@@ -814,6 +822,17 @@ export function createCompactor(
         compactOptions.signal,
         compactOptions.customInstructions,
       );
+    },
+
+    inspect(messages) {
+      const view = buildView(messages);
+
+      return {
+        viewMessages: view.length,
+        estimatedTokens: estimateCurrent(messages, view),
+        threshold: settings.contextWindow - settings.reserveTokens,
+        compacted: state !== undefined,
+      };
     },
   };
 }

@@ -1129,6 +1129,33 @@ const replCommands: ReplCommand[] = [
     },
   },
   {
+    names: ["/session"],
+    description: "显示当前会话的文件、消息数和上下文大小",
+    run() {
+      const messages = agent.state.messages;
+      const context = active.compactor.inspect(messages);
+      const percent = Math.round(
+        (context.estimatedTokens / context.threshold) * 100,
+      );
+
+      console.log(
+        `\n会话文件：${active.writer.path}${existsSync(active.writer.path) ? "" : "（还没有消息，文件尚未创建）"}`,
+      );
+      console.log(`会话 id：${active.writer.id}`);
+      console.log(
+        `消息：${messages.length} 条${context.compacted ? `，已压缩；发给模型的视图约 ${context.viewMessages} 条` : ""}`,
+      );
+      console.log(
+        `上下文：估算约 ${context.estimatedTokens} tokens，压缩阈值 ${context.threshold}（${percent}%）`,
+      );
+      console.log(
+        `本次运行：${taskCount} 个任务，input ${total.input + total.compactionInput}，output ${total.output + total.compactionOutput}`,
+      );
+
+      return "continue";
+    },
+  },
+  {
     names: ["/exit", "/quit"],
     description: "退出（在提示符处按 Ctrl+C 或 Ctrl+D 也可以）",
     run() {
