@@ -538,6 +538,9 @@ const {
 
 let interrupted = false;
 
+/** 中止 /compact 这类在 Agent 任务之外发起的模型请求。 */
+let commandAbort: AbortController | undefined;
+
 function handleInterrupt(): void {
   if (interrupted) {
     process.exit(130);
@@ -550,6 +553,7 @@ function handleInterrupt(): void {
   );
 
   agent.abort();
+  commandAbort?.abort();
 }
 
 process.on("SIGINT", handleInterrupt);
@@ -1072,6 +1076,54 @@ const replCommands: ReplCommand[] = [
 
       printPreviousSession(previous);
       printLastUserMessage(next.restored.messages);
+
+      return "continue";
+    },
+  },
+  {
+    names: ["/compact"],
+    usage: "[额外要求]",
+    description: "立即压缩当前会话的上下文，可以附带对总结的要求",
+
+    async run(args): Promise<ReplAction> {
+      const messages = agent.state.messages;
+
+      if (messages.length === 0) {
+        console.log("当前会话还没有消息，无需压缩。");
+        return "continue";
+      }
+
+      // 手动总结单独统计，并允许 Ctrl+C 中止。
+      current = emptyStats();
+      interrupted = false;
+      commandAbort = new AbortController();
+
+      const outcome = await active.compactor
+        .compact(messages, {
+          signal: commandAbort.signal,
+          customInstructions:
+            args.length > 0 ? args : undefined,
+        })
+        .finally(() => {
+          commandAbort = undefined;
+        });
+
+      if (outcome.status === "nothing") {
+        console.log(
+          `没有可以压缩的内容：保留区（最近约 ${compactionSettings.keepRecentTokens} tokens）之外没有消息。`,
+        );
+      } else if (
+        outcome.status === "failed"
+        && interrupted
+      ) {
+        console.log("已中止。");
+      }
+
+      // 计入整个进程的 Token 合计，但不增加任务数。
+      printTokens(current, "");
+      addStats(total, current);
+      current = emptyStats();
+      interrupted = false;
 
       return "continue";
     },

@@ -269,11 +269,27 @@ export type CompactorOptions = {
 };
 
 
+/** 压缩成功会调用 onCompaction；失败会调用 onError。 */
+export type CompactResult =
+  | { status: "compacted"; event: CompactionEvent }
+  | { status: "nothing" }
+  | { status: "failed"; error: unknown };
+
+
 export type Compactor = {
   transformContext(
     messages: AgentMessage[],
     signal?: AbortSignal,
   ): Promise<AgentMessage[]>;
+
+  /** 跳过阈值检查，使用与自动压缩相同的切点规则。 */
+  compact(
+    messages: AgentMessage[],
+    options?: {
+      signal?: AbortSignal | undefined;
+      customInstructions?: string | undefined;
+    },
+  ): Promise<CompactResult>;
 };
 
 
@@ -547,6 +563,7 @@ export function createCompactor(
     originalRequest: string | undefined,
     previousSummary: string | undefined,
     signal: AbortSignal | undefined,
+    customInstructions: string | undefined,
   ): Promise<{ text: string; attempts: number; usage?: Usage }> {
     const parts: string[] = [];
 
@@ -565,6 +582,12 @@ export function createCompactor(
         ? UPDATE_INSTRUCTIONS
         : SUMMARY_INSTRUCTIONS,
     );
+
+    if (customInstructions !== undefined) {
+      parts.push(
+        `Additional instructions from the user for this checkpoint:\n${customInstructions}`,
+      );
+    }
 
     parts.push(
       `Keep the checkpoint under about ${maxSummaryTokens} tokens. Prioritize findings and remaining work; compress older details when updating.`,
@@ -655,6 +678,104 @@ export function createCompactor(
   }
 
 
+  /** 自动和手动压缩共用：总结 [上次保留起点, 新切点) 这一段。 */
+  async function compactNow(
+    messages: AgentMessage[],
+    tokensBefore: number,
+    signal: AbortSignal | undefined,
+    customInstructions: string | undefined,
+  ): Promise<CompactResult> {
+    const startIndex = state?.firstKeptIndex ?? 0;
+
+    const cut = findCutPoint(
+      messages,
+      startIndex,
+      settings.keepRecentTokens,
+    );
+
+    if (cut.firstKeptIndex <= startIndex) {
+      return { status: "nothing" };
+    }
+
+    // 被切开那一轮的开头 user 消息原样保留，不进总结
+    const range = messages
+      .slice(startIndex, cut.firstKeptIndex)
+      .filter((_, offset) => startIndex + offset !== cut.turnStartIndex);
+
+    // 多轮之后：上次原样保留的（更早一轮的）任务这次不再保留。
+    // 它不在新视图里，上次的总结也被告知不要复制它，所以必须放进这次的总结。
+    const previousPinned = state?.turnStartIndex ?? -1;
+
+    const droppedPin =
+      previousPinned >= 0 && previousPinned !== cut.turnStartIndex
+        ? messages[previousPinned]
+        : undefined;
+
+    const toSummarize = droppedPin
+      ? [droppedPin, ...range]
+      : range;
+
+    if (toSummarize.length === 0) {
+      return { status: "nothing" };
+    }
+
+    const pinned =
+      cut.turnStartIndex >= 0
+        ? messages[cut.turnStartIndex]
+        : undefined;
+
+    try {
+      const result = await summarize(
+        toSummarize,
+        pinned?.role === "user" ? textOf(pinned.content) : undefined,
+        state?.modelSummary,
+        signal,
+        customInstructions,
+      );
+
+      const readFiles = new Set<string>(state?.readFiles);
+      const modifiedFiles = new Set<string>(state?.modifiedFiles);
+
+      collectFiles(toSummarize, readFiles, modifiedFiles);
+
+      const nextState: CompactionState = {
+        modelSummary: result.text,
+        summaryMessage: createSummaryMessage({
+          modelSummary: result.text,
+          readFiles,
+          modifiedFiles,
+        }),
+        firstKeptIndex: cut.firstKeptIndex,
+        turnStartIndex: cut.turnStartIndex,
+        trustUsageFrom: messages.length,
+        readFiles,
+        modifiedFiles,
+      };
+
+      state = nextState;
+
+      const event: CompactionEvent = {
+        summary: result.text,
+        attempts: result.attempts,
+        checkpoint: checkpointOf(nextState),
+        tokensBefore,
+        estimatedTokensAfter: sumTokens(buildView(messages)),
+        summarizedMessages: toSummarize.length,
+        keptMessages: messages.length - cut.firstKeptIndex,
+        ...(result.usage ? { usage: result.usage } : {}),
+      };
+
+      options.onCompaction?.(event);
+
+      return { status: "compacted", event };
+    } catch (error) {
+      // 总结失败时保留原有压缩状态。
+      options.onError?.(error);
+      return { status: "failed", error };
+    }
+  }
+
+
   return {
     async transformContext(messages, signal) {
       const view = buildView(messages);
@@ -669,93 +790,30 @@ export function createCompactor(
         return view;
       }
 
-      const startIndex = state?.firstKeptIndex ?? 0;
-
-      const cut = findCutPoint(
+      const result = await compactNow(
         messages,
-        startIndex,
-        settings.keepRecentTokens,
+        tokens,
+        signal,
+        undefined,
       );
 
-      if (cut.firstKeptIndex <= startIndex) {
-        return view;
-      }
+      return result.status === "compacted"
+        ? buildView(messages)
+        : view;
+    },
 
-      // 被切开那一轮的开头 user 消息原样保留，不进总结
-      const range = messages
-        .slice(startIndex, cut.firstKeptIndex)
-        .filter((_, offset) => startIndex + offset !== cut.turnStartIndex);
+    async compact(messages, compactOptions = {}) {
+      const tokens = estimateCurrent(
+        messages,
+        buildView(messages),
+      );
 
-      // 多轮之后：上次原样保留的（更早一轮的）任务这次不再保留。
-      // 它不在新视图里，上次的总结也被告知不要复制它，所以必须放进这次的总结。
-      const previousPinned = state?.turnStartIndex ?? -1;
-
-      const droppedPin =
-        previousPinned >= 0 && previousPinned !== cut.turnStartIndex
-          ? messages[previousPinned]
-          : undefined;
-
-      const toSummarize = droppedPin
-        ? [droppedPin, ...range]
-        : range;
-
-      if (toSummarize.length === 0) {
-        return view;
-      }
-
-      const pinned =
-        cut.turnStartIndex >= 0
-          ? messages[cut.turnStartIndex]
-          : undefined;
-
-      try {
-        const result = await summarize(
-          toSummarize,
-          pinned?.role === "user" ? textOf(pinned.content) : undefined,
-          state?.modelSummary,
-          signal,
-        );
-
-        const readFiles = new Set<string>(state?.readFiles);
-        const modifiedFiles = new Set<string>(state?.modifiedFiles);
-
-        collectFiles(toSummarize, readFiles, modifiedFiles);
-
-        const nextState: CompactionState = {
-          modelSummary: result.text,
-          summaryMessage: createSummaryMessage({
-            modelSummary: result.text,
-            readFiles,
-            modifiedFiles,
-          }),
-          firstKeptIndex: cut.firstKeptIndex,
-          turnStartIndex: cut.turnStartIndex,
-          trustUsageFrom: messages.length,
-          readFiles,
-          modifiedFiles,
-        };
-
-        state = nextState;
-
-        const newView = buildView(messages);
-
-        options.onCompaction?.({
-          summary: result.text,
-          attempts: result.attempts,
-          checkpoint: checkpointOf(nextState),
-          tokensBefore: tokens,
-          estimatedTokensAfter: sumTokens(newView),
-          summarizedMessages: toSummarize.length,
-          keptMessages: messages.length - cut.firstKeptIndex,
-          ...(result.usage ? { usage: result.usage } : {}),
-        });
-
-        return newView;
-      } catch (error) {
-        // 总结失败不终止任务：这次不压缩，照原样继续
-        options.onError?.(error);
-        return view;
-      }
+      return compactNow(
+        messages,
+        tokens,
+        compactOptions.signal,
+        compactOptions.customInstructions,
+      );
     },
   };
 }

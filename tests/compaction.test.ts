@@ -402,6 +402,62 @@ describe("createCompactor", () => {
     expect(prompts[1]).toContain("[User]: 任务一：只读，不要修改 src");
   });
 
+  it("compacts on demand below the threshold and passes custom instructions to the summarizer", async () => {
+    const { streamFn, prompts } = fakeSummarizer();
+    const events: CompactionEvent[] = [];
+
+    // 短会话全部位于保留区内，没有可总结的部分。
+    const short = createCompactor({
+      model: fakeModel,
+      streamFn,
+      settings,
+    });
+
+    expect(
+      (await short.compact([user("hi"), say("hello")])).status,
+    ).toBe("nothing");
+
+    const compactor = createCompactor({
+      model: fakeModel,
+      streamFn,
+      settings,
+      onCompaction: (event) => {
+        events.push(event);
+      },
+    });
+
+    // 低于自动压缩阈值，但近期保留区之外还有内容。
+    const messages: AgentMessage[] = [
+      user("task"),
+      callTool("a.ts"),
+      result("x".repeat(600), false, "call-a.ts"),
+      callTool("b.ts"),
+      result("x".repeat(600), false, "call-b.ts"),
+      say("done"),
+    ];
+
+    expect(
+      await compactor.transformContext(messages),
+    ).toBe(messages);
+
+    expect(prompts).toHaveLength(0);
+
+    const outcome = await compactor.compact(messages, {
+      customInstructions: "重点保留 a.ts 的结论",
+    });
+
+    expect(outcome.status).toBe("compacted");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("重点保留 a.ts 的结论");
+    expect(events).toHaveLength(1);
+
+    const view = await compactor.transformContext(messages);
+
+    expect(view[0]).toBe(messages[0]);
+    expect(summaryText(view[1])).toContain("SUMMARY-1");
+    expect(view.slice(2)).toEqual(messages.slice(3));
+  });
+
   // 有可总结的内容（1、2），且超过阈值
   function overflowing(): AgentMessage[] {
     return [
