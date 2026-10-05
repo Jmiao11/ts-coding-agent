@@ -107,10 +107,10 @@ alias agent-harness="node /path/to/agent-harness/dist/cli.js"
 ```bash
 agent-harness "修复 tests/foo.test.ts 里失败的测试"
 agent-harness -w ../some-repo "解释 src/agent/agent-loop.ts 的用途"
-agent-harness -m deepseek-chat "跑一遍测试，并说明失败原因"
+agent-harness -m deepseek-flash "跑一遍测试，并说明失败原因"
 ```
 
-选项（`agent-harness --help` 的输出）：
+选项：
 
 | 选项 | 说明 |
 | --- | --- |
@@ -118,25 +118,72 @@ agent-harness -m deepseek-chat "跑一遍测试，并说明失败原因"
 | `-m, --model <id>` | 模型 ID，覆盖 `AGENT_MODEL` |
 | `--env-file <path>` | API 配置文件，默认主目录的 `.agent-harness.env` |
 | `--context-window <n>` | 工作预算（不是模型上限），估算超过就压缩；默认 128000，调小可用来测试压缩。必须是不小于 8000 的整数 |
-| `-c, --continue` | 继续这个 workspace 最近的会话（任务描述作为追问） |
-| `-r, --resume` | 从这个 workspace 的会话列表里选一个继续（交互式，需要 TTY） |
+| `-c, --continue` | 继续这个 workspace 最近的会话 |
+| `-r, --resume` | 从这个 workspace 的会话列表里选一个继续（需要交互式终端） |
 | `--session <id>` | 按会话 ID 前缀继续指定的会话（`-r` 列表显示前 8 位） |
 | `-h, --help` | 显示帮助 |
 
-任务描述是位置参数：多个位置参数会用空格拼成一个任务；未指定继续会话选项且任务为空时打印帮助并以退出码 1 退出。所有文件工具的相对路径都相对 workspace 根目录，`run_command` 也在 workspace 根目录执行。
+任务描述是位置参数：多个位置参数会用空格拼成一个任务。所有文件工具的相对路径都相对 workspace 根目录，`run_command` 也在 workspace 根目录执行。
 
-用 `-c` / `-r` / `--session` 继续会话时**可以不写任务描述**：CLI 先选好会话，再在终端里输入追问（直接回车则取消退出）。三者只能选一个，同时给多个会报错退出；`-c` 没有记录时就开一个新会话。不继续会话又没有任务描述时，仍然打印帮助并退出码 1。非交互环境（stdin 不是 TTY）不能这样省略任务描述，`-r` 也必须在交互式终端里用。
+不写任务描述时进入**交互模式**（见下一节）。`-c` / `-r` / `--session` 只决定用哪个会话，和「跑一次还是交互」无关：
+
+- **写了任务描述**：先接上选中的会话（`-c` / `-r` / `--session` 都会这样做），再跑一个任务后退出，不进入交互模式。
+- **不写任务描述**：进入交互模式，会话是 `-c` / `-r` / `--session` 指定的那个（没指定就开新会话），之后每个任务都写进同一个会话。
+- 三者只能选一个，同时给多个会直接报错退出；`-c` 在该 workspace 没有记录时会打印一行提示并开新会话。
+
+**非交互环境**（stdin 不是 TTY，例如管道、重定向、CI）里不能进入交互模式，规则是：
+
+- 没写任务描述时直接退出码 1 结束：没给 `-c` / `-r` / `--session` 时打印帮助，给了则报错「缺少任务描述：非交互环境里请把任务写在命令里」。
+- `-r` 需要在交互式终端里选会话，所以在这种环境下配合任务描述也无法使用（会提示改用 `--session <id>`）。
+- 非交互环境里命令确认一律按拒绝处理。
 
 agent 可用的工具：`list_directory`、`read_file`、`search_text`、`write_file`、`edit_file`、`run_command`。
 
-运行时你会看到：
+## 交互模式
 
-- 启动时打印 `workspace` / `model` / `task`
-- 每轮结束时打印模型输出的 `[assistant] ...` 文本；`run_command` 的输出会单独成块打印
-- 结束时打印模型调用次数、执行过的工具名，以及 token 用量（`input` / `cachedInput` / `output` / `peakInput`）
-- 内置预算：最多 **50 次模型调用**、**120 次工具调用**，超出后停止并打印 `[stopped] ...`
+不写任务描述、且在交互式终端（stdin 是 TTY）里运行时，CLI 进入交互模式：可以连续输入多个任务，它们共用同一个会话文件。
 
-退出码：正常结束为 `0`（包括触发预算上限），被 Ctrl+C 中止为 `130`。第一次 Ctrl+C 会中止 agent 并杀掉正在运行的命令，再按一次强制退出。
+- 输入任务后回车就运行，提示符是 `> `（前面先打印一行说明，以及 `workspace` / `model` / `thinking` / `session` / `context` 等启动信息）。续接已有会话时，进入循环前会先打印一行 `上次的最后一条：...`，让你确认接的是哪个会话。
+- **只按回车（空行、纯空白）会被忽略**，不退出也不运行任务，继续等下一次输入。
+- 输入 `/exit` 退出；`Ctrl+C` 或 `Ctrl+D` 也会退出（`Ctrl+D` 相当于输入流结束）。
+- **任务运行中按 `Ctrl+C` 只中止当前任务**（同时会杀掉正在运行的命令），回到提示符，可以接着输入下一个任务。想强制退出就连按两次 `Ctrl+C`（退出码 130）。
+- 每个任务结束时都会打印这个任务的统计：`模型调用次数`、`执行过的工具`，以及 token 用量（有数据时才打印）。这些统计是**按任务**的，每个任务开始时清零。
+- 交互模式里退出时，如果跑过**多于一个**任务，会额外打印一行「本次共 N 个任务：」和所有任务的 token 合计。
+
+预算也是按任务算的（最多 50 次模型调用、120 次工具调用）：交互模式里每个任务都重新计数，上一个任务用掉的额度不会留给下一个任务。
+
+## 运行时会看到什么
+
+启动时按顺序打印：
+
+- `workspace:` 实际的 workspace 根目录（绝对路径；工作区有未提交改动时，在此之前还有一条警告）
+- `model:` 模型 ID
+- `thinking:` `disabled`，或没设置时的 `(provider default)`
+- `session:` 会话文件路径；续接会话时形如 `继续 <路径>（N 条消息）`，只有这个会话压缩过才会多出「，已压缩过」
+- `context:` 压缩配置，`window=` / `reserve=` / `keepRecent=`
+- 单任务模式下紧接着打印 `task:` 和任务描述；交互模式则改为打印交互模式说明
+
+运行过程中：
+
+- 每次调用模型之前都会打印一行 `[context] est=... threshold=...`（当前的估算 token 和压缩阈值），不只是触发压缩时才打印
+- 还有 logger 打印的流程日志：每轮 `[turn N] start` / `[turn N] end`；每次模型调用 `[model start]`（含 call/turn/model/messages）与 `[model end]`（含 `stopReason=` 和 `in=` `cached=` `out=`）；每次工具调用 `[tool start]`（含工具名和参数）与 `[tool end]`（含 `error=`）；整个任务结束 `[run end] status=...`
+- 每轮结束时打印模型输出的 `[assistant] ...` 文本；`run_command` 的输出会单独成块（`----- run_command output -----`）打印
+- 触发压缩时打印 `[compaction #N]` 和 summary 全文；压缩失败打印 `[compaction failed] ...` 后继续运行
+- 模型报错打印 `[model error] ...`；达到预算上限打印 `[stopped] ...`；被中止打印 `[中止] ...` 和 `已中止。`；意外错误打印 `[error] ...` 和堆栈
+
+结束时（每个任务结束时都打印一次，见上一节）：
+
+- `模型调用次数：`、`执行过的工具：`，以及 token 用量（`input` / `cachedInput` / `output` / `peakInput`，有压缩时还有压缩用的 token 和合计）
+- 交互模式下跑过多个任务时，额外打印全部任务的 token 合计
+- 会话文件存在时打印 `会话记录：<路径>` 和 `继续这个会话：agent-harness -c`
+- 最后打印 `请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。`
+
+退出码：
+
+- 单次运行（写了任务描述）被 Ctrl+C 中止：`130`
+- 交互模式：任务被 Ctrl+C 中止只回到提示符，之后正常退出（`/exit`、Ctrl+C 或 Ctrl+D）仍然是 `0`；连按两次 Ctrl+C 强制退出才是 `130`
+- 出现意外错误（打印 `[error]` 和堆栈）时退出码是 `1`；交互模式里这个退出码会保留到最终退出（后面的任务成功也不会把它清掉）
+- 其他情况正常结束为 `0`（包括触发预算上限）
 
 ## 安全须知
 
@@ -176,17 +223,19 @@ pnpm test:watch    # vitest watch
 所以会话记录和 key 一样放在主目录，不落在被 agent 修改的仓库里。
 
 - `-c` 选的是该 workspace 下**最近活动**（文件 mtime 最新）的那个会话
-- `-r` 列出最近活动的 20 个会话（每行显示活动时间、id 前 8 位、消息条数、是否压缩过，以及首条/最后一条用户消息），输入编号选择；更早的会话不会列出，用 `--session <id>` 按 id 前缀指定（前缀能匹配多个会话时会要求你多写几位）
+- `-r` 需要交互式终端：先列出最近活动的 20 个会话（每行显示活动时间、id 前 8 位、消息条数、是否压缩过，以及首条/最后一条用户消息），再提示「继续哪一个？输入编号（直接回车取消）」；直接回车或输入无效编号都会打印「已取消。」并以退出码 0 结束。更早的会话不会列出，用 `--session <id>` 按 id 前缀指定（前缀能匹配多个会话时会要求你多写几位）
 
-启动和结束时都会打印会话文件路径，结束时还会提示用 `agent-harness -c "追问内容"` 继续。
+`-c` / `-r` / `--session` 只是选会话（见「用法和选项」）：不写任务描述就进入交互模式，写了任务描述就跑一次后退出。启动和结束时都会打印会话文件路径，结束时还会提示用 `agent-harness -c` 继续这个会话。
 
 代码结构：
 
 | 目录 | 内容 |
 | --- | --- |
-| `src/cli.ts` | CLI：参数解析、env 文件、Git 检查、命令确认、终端输出 |
+| `src/cli.ts` | CLI：参数解析、env 文件、Git 检查、交互模式、命令确认、终端输出 |
 | `src/agent/` | Agent、agent loop、extension 与 hook 机制 |
 | `src/ai/` | 统一消息类型、事件流，`src/ai/providers/openai-compatible.ts` 是 OpenAI-compatible provider |
+| `src/context/` | `compaction.ts`（压缩：裁剪点、summary、checkpoint）、`token-estimate.ts`（token 估算与从消息里取文本） |
+| `src/session/` | `session-store.ts`（JSONL 会话读写、列表、重建）、`sanitize-for-llm.ts`（发给模型前整理历史：去掉出错或中止的回复，补齐缺失的工具结果） |
 | `src/tools/` | 六个工具：list_directory、read_file、search_text、write_file、edit_file、run_command |
 | `src/extensions/` | `budget.ts`（调用次数预算）、`command-approval.ts`（命令白名单与确认） |
 | `src/prompts/` | coding system prompt |
