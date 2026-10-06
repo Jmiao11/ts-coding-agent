@@ -111,6 +111,77 @@ describe("runAgentLoop", () => {
     expect(statuses).toEqual(["aborted"]);
   });
 
+  it("skips the rest of the tool batch once aborted, without asking or running tools", async () => {
+    const controller = new AbortController();
+    const prompt: UserMessage = { role: "user", content: "write both", timestamp: 1 };
+    const toolCallMessage: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-1", name: "write", arguments: {} },
+        { type: "toolCall", id: "call-2", name: "write", arguments: {} },
+      ],
+      provider: "fake",
+      model: "fake-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+    let modelCalls = 0;
+    const streamFn: StreamFn = () => {
+      modelCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "start", partial: toolCallMessage });
+      stream.push({ type: "done", reason: "toolUse", message: toolCallMessage });
+      stream.end();
+      return stream;
+    };
+    let executed = 0;
+    const parameters = Type.Object({});
+    const writeTool: AgentTool<typeof parameters, Record<string, never>> = {
+      name: "write",
+      label: "Write",
+      description: "Pretends to write a file; ignores the abort signal like write_file.",
+      parameters,
+      async execute() {
+        executed += 1;
+        return { content: [{ type: "text", text: "written" }], details: {} };
+      },
+    };
+    const asked: string[] = [];
+    const statuses: string[] = [];
+    const config: AgentLoopConfig = {
+      model: { id: "fake-model", provider: "fake", name: "Fake Model", contextWindow: 1000, maxTokens: 100 },
+      convertToLlm(messages) { return [...messages]; },
+      extensions: [{
+        name: "approval",
+        hooks: {
+          beforeToolCall({ toolCall }) {
+            asked.push(toolCall.id);
+            // 模拟在第一个确认提示处按 Ctrl+C：中止，并当作拒绝
+            if (toolCall.id === "call-1") {
+              controller.abort();
+              return { block: true, reason: "The user rejected this command." };
+            }
+            return undefined;
+          },
+          onRunEnd({ status }) { statuses.push(status); },
+        },
+      }],
+    };
+    const newMessages = await runAgentLoop(
+      [prompt], { messages: [], tools: [writeTool] }, config,
+      controller.signal, streamFn, () => {},
+    );
+    const interrupted = "Not run: the user interrupted the run before this tool call started.";
+    expect(modelCalls).toBe(1);
+    expect(asked).toEqual(["call-1"]);
+    expect(executed).toBe(0);
+    expect(newMessages.filter((message) => message.role === "toolResult")).toMatchObject([
+      { toolCallId: "call-1", isError: true, content: [{ type: "text", text: interrupted }] },
+      { toolCallId: "call-2", isError: true, content: [{ type: "text", text: interrupted }] },
+    ]);
+    expect(statuses).toEqual(["aborted"]);
+  });
+
   it("runs one streamed model turn and emits lifecycle events in order", async () => {
     const prompt: UserMessage = {
       role: "user",

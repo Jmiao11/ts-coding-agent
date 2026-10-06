@@ -75,6 +75,10 @@ function createToolErrorMessage(
   };
 }
 
+/** 中止后不执行的工具调用也要有结果：toolCall 和 toolResult 必须成对。 */
+const NOT_RUN_AFTER_ABORT =
+  "Not run: the user interrupted the run before this tool call started.";
+
 async function executeToolCall(
   toolCall: ToolCall,
   context: AgentContext,
@@ -90,9 +94,10 @@ async function executeToolCall(
   });
 
   if (blocked) {
+    // 在确认提示处按 Ctrl+C 也表现为 block：那是用户中止，不是拒绝
     return createToolErrorMessage(
       toolCall,
-      blocked.reason,
+      signal?.aborted ? NOT_RUN_AFTER_ABORT : blocked.reason,
     );
   }
 
@@ -510,14 +515,17 @@ async function endTurn(
 
 
     for (const toolCall of toolCalls) {
-      const toolResult = await executeToolCall(
-        toolCall,
-        currentContext,
-        signal,
-        emit,
-        turnIndex,
-        extensionHost,
-      );
+      // 已中止：剩下的不再询问、不再执行（write_file / edit_file 不看 signal）
+      const toolResult = signal?.aborted
+        ? createToolErrorMessage(toolCall, NOT_RUN_AFTER_ABORT)
+        : await executeToolCall(
+            toolCall,
+            currentContext,
+            signal,
+            emit,
+            turnIndex,
+            extensionHost,
+          );
 
       /*
        * ToolResultMessage 本身也属于 transcript，
