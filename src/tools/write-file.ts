@@ -13,6 +13,11 @@ import {
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
+import {
+  untracked,
+  type WriteTracker,
+} from "./write-tracker.js";
+
 const writeFileParameters = Type.Object(
   {
     path: Type.String({
@@ -36,6 +41,7 @@ export type WriteFileDetails = {
 
 export function createWriteFileTool(
   workspaceRoot: string,
+  options: { track?: WriteTracker } = {},
 ): AgentTool<
   typeof writeFileParameters,
   WriteFileDetails
@@ -47,7 +53,7 @@ export function createWriteFileTool(
     "Create or completely overwrite a UTF-8 text file inside the workspace. Missing parent directories are created. To change part of an existing file, use edit_file.",
     parameters: writeFileParameters,
 
-    async execute(_toolCallId, parameters) {
+    async execute(toolCallId, parameters) {
       const {
         absolutePath,
         relativePath,
@@ -85,13 +91,19 @@ export function createWriteFileTool(
         }
       }
 
-      await mkdir(dirname(absolutePath), {
-        recursive: true,
-      });
-      await writeFile(
-        absolutePath,
-        parameters.content,
-        "utf8",
+      // 安全检查都已通过：从这里开始的写入交给 track（检查点在这里记录）
+      await (options.track ?? untracked)(
+        { absolutePath, relativePath, toolCallId },
+        async () => {
+          await mkdir(dirname(absolutePath), {
+            recursive: true,
+          });
+          await writeFile(
+            absolutePath,
+            parameters.content,
+            "utf8",
+          );
+        },
       );
 
       const bytes = Buffer.byteLength(

@@ -15,6 +15,11 @@ import {
   resolveWorkspacePath,
 } from "./workspace-path.js";
 
+import {
+  untracked,
+  type WriteTracker,
+} from "./write-tracker.js";
+
 
 const editFileParameters =
   Type.Object(
@@ -130,6 +135,7 @@ function splitLines(
 
 export function createEditFileTool(
   workspaceRoot: string,
+  options: { track?: WriteTracker } = {},
 ): AgentTool<
   typeof editFileParameters,
   EditFileDetails
@@ -147,7 +153,7 @@ export function createEditFileTool(
 
 
     async execute(
-      _toolCallId,
+      toolCallId,
       parameters,
     ) {
       const {
@@ -230,7 +236,11 @@ export function createEditFileTool(
         + replacement
         + content.slice(match.index + match.text.length);
 
-      await writeFile(absolutePath, updated, "utf8");
+      // 安全检查都已通过：从这里开始的写入交给 track（检查点在这里记录）
+      await (options.track ?? untracked)(
+        { absolutePath, relativePath, toolCallId },
+        () => writeFile(absolutePath, updated, "utf8"),
+      );
 
       const line =
         content.slice(0, match.index).split("\n").length;

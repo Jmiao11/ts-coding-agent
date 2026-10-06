@@ -31,6 +31,15 @@ import {
   Agent,
 } from "./agent/agent.js";
 
+import {
+  captureFileChange,
+} from "./checkpoint/file-change.js";
+
+import type {
+  WriteTarget,
+  WriteTracker,
+} from "./tools/write-tracker.js";
+
 import type {
   TextContent,
 } from "./ai/types.js";
@@ -710,6 +719,9 @@ const streamFn = createOpenAICompatibleStreamFn({
 type ActiveSession = {
   writer: SessionWriter;
   compactor: Compactor;
+
+  /** 当前任务的 user 消息条目 id：这个任务里的文件变化都记在它名下 */
+  taskEntryId: string | undefined;
 };
 
 
@@ -775,11 +787,42 @@ function createActiveSession(
     },
   });
 
-  return { writer, compactor };
+  return { writer, compactor, taskEntryId: undefined };
 }
 
 
 let active = createActiveSession(initialWriter, restored?.checkpoint);
+
+
+// ---------- 检查点 ----------
+// 写工具通过安全检查后调用：改动前后的内容记进当前会话，/undo 用。
+
+const trackWrite: WriteTracker = <T>(
+  target: WriteTarget,
+  write: () => Promise<T>,
+): Promise<T> => {
+  const taskEntryId = active.taskEntryId;
+
+  // 工具只会在任务里被调用；万一不在任务里，照常写，只是不能撤销
+  if (taskEntryId === undefined) {
+    return write();
+  }
+
+  return captureFileChange({
+    absolutePath: target.absolutePath,
+    path: target.relativePath,
+    toolCallId: target.toolCallId,
+    write,
+    record: (change) => {
+      active.writer.appendFileChange({ taskEntryId, ...change });
+    },
+    onRecordError: (error) => {
+      console.error(
+        `[checkpoint] ${target.relativePath} 的修改没有记录下来，无法撤销：${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  });
+};
 
 
 // ---------- Agent ----------
@@ -803,8 +846,8 @@ const agent = new Agent({
       createListDirectoryTool(workspaceRoot),
       createReadFileTool(workspaceRoot),
       createSearchTextTool(workspaceRoot),
-      createWriteFileTool(workspaceRoot),
-      createEditFileTool(workspaceRoot),
+      createWriteFileTool(workspaceRoot, { track: trackWrite }),
+      createEditFileTool(workspaceRoot, { track: trackWrite }),
       createRunCommandTool(workspaceRoot),
     ],
   },
@@ -831,7 +874,12 @@ const agent = new Agent({
 agent.subscribe((event) => {
   // 只写完整消息；流式中的 partial 不写
   if (event.type === "message_end") {
-    active.writer.appendMessage(event.message);
+    const entryId = active.writer.appendMessage(event.message);
+
+    // 任务从 user 消息开始：之后的文件变化都记在这个任务名下
+    if (event.message.role === "user") {
+      active.taskEntryId = entryId;
+    }
   }
 
   if (event.type === "tool_execution_start") {

@@ -34,6 +34,10 @@ import type {
   CompactionCheckpoint,
 } from "../context/compaction.js";
 
+import type {
+  FileSnapshot,
+} from "../checkpoint/file-change.js";
+
 
 import {
   textOf,
@@ -96,9 +100,24 @@ export type CompactionEntry = EntryBase & {
 };
 
 
+/** 写工具造成的一次文件变化（检查点）；不属于 transcript */
+export type FileChangeEntry = EntryBase & {
+  type: "file_change";
+
+  /** 发起这个任务的 user 消息条目 */
+  taskEntryId: string;
+
+  toolCallId: string;
+  path: string;
+  before: FileSnapshot;
+  after: FileSnapshot;
+};
+
+
 export type SessionEntry =
   | MessageEntry
-  | CompactionEntry;
+  | CompactionEntry
+  | FileChangeEntry;
 
 
 export type LoadedSession = {
@@ -383,6 +402,15 @@ export type SessionWriter = {
     checkpoint: CompactionCheckpoint,
     extra: { tokensBefore: number; usage?: Usage },
   ): string;
+
+  /** 追加一次文件变化（检查点），返回条目 ID */
+  appendFileChange(change: {
+    taskEntryId: string;
+    toolCallId: string;
+    path: string;
+    before: FileSnapshot;
+    after: FileSnapshot;
+  }): string;
 };
 
 
@@ -488,6 +516,20 @@ export function createSessionWriter(
           modifiedFiles: checkpoint.modifiedFiles,
         },
         ...(extra.usage ? { usage: extra.usage } : {}),
+      };
+
+      write(entry);
+
+      return entry.id;
+    },
+
+    appendFileChange(change) {
+      const entry: FileChangeEntry = {
+        type: "file_change",
+        id: generateId(ids),
+        parentId: lastId,
+        timestamp: new Date().toISOString(),
+        ...change,
       };
 
       write(entry);
