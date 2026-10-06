@@ -10,6 +10,7 @@ import type {
 } from "../agent/types.js";
 
 import {
+  assertNotInsideGitDir,
   assertNotSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
@@ -164,6 +165,7 @@ export function createEditFileTool(
       }
 
       assertNotSecretFile(relativePath);
+      assertNotInsideGitDir(workspaceRoot, absolutePath, relativePath);
 
       const content =
         await readFile(absolutePath, "utf8");

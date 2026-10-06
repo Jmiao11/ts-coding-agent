@@ -8,6 +8,7 @@ import Type from "typebox";
 
 import type { AgentTool } from "../agent/types.js";
 import {
+  assertNotInsideGitDir,
   assertNotSecretFile,
   resolveWorkspacePath,
 } from "./workspace-path.js";
@@ -62,6 +63,7 @@ export function createWriteFileTool(
       }
 
       assertNotSecretFile(relativePath);
+      assertNotInsideGitDir(workspaceRoot, absolutePath, relativePath);
 
       let created = false;
 

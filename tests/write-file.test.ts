@@ -1,8 +1,10 @@
 import {
+  mkdir,
   mkdtemp,
   readFile,
   rm,
   stat,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
@@ -19,6 +21,10 @@ import {
 import {
   createWriteFileTool,
 } from "../src/tools/write-file.js";
+
+import {
+  createEditFileTool,
+} from "../src/tools/edit-file.js";
 
 let root: string | undefined;
 
@@ -40,6 +46,47 @@ async function createWorkspace(): Promise<string> {
 }
 
 describe("write_file", () => {
+  it("refuses to write inside .git, however the path is spelled", async () => {
+    const root = await createWorkspace();
+
+    await mkdir(join(root, ".git", "hooks"), { recursive: true });
+    await writeFile(join(root, ".git", "config"), "[core]\n", "utf8");
+
+    const write = createWriteFileTool(root);
+    const edit = createEditFileTool(root);
+
+    const paths = [
+      ".git/hooks/pre-commit",
+      ".GIT/hooks/pre-commit",
+      "sub/.git/hooks/pre-commit",
+      ...(process.platform === "win32"
+        ? [".git./hooks/pre-commit", ".git /hooks/pre-commit"]
+        : []),
+    ];
+
+    for (const path of paths) {
+      await expect(
+        write.execute("call-1", { path, content: "echo pwned" }),
+      ).rejects.toThrow("blocked");
+    }
+
+    await expect(
+      edit.execute("call-2", {
+        path: ".git/config",
+        oldText: "[core]",
+        newText: "[core]\n\thooksPath = evil",
+      }),
+    ).rejects.toThrow("blocked");
+
+    await expect(
+      stat(join(root, ".git", "hooks", "pre-commit")),
+    ).rejects.toThrow();
+
+    expect(
+      await readFile(join(root, ".git", "config"), "utf8"),
+    ).toBe("[core]\n");
+  });
+
   it("creates a new file and missing parent directories", async () => {
     const root = await createWorkspace();
     const tool = createWriteFileTool(root);
