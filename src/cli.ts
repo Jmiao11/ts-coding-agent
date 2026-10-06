@@ -35,6 +35,12 @@ import {
   captureFileChange,
 } from "./checkpoint/file-change.js";
 
+import {
+  applyUndo,
+  findConflicts,
+  planUndo,
+} from "./checkpoint/undo.js";
+
 import type {
   WriteTarget,
   WriteTracker,
@@ -1204,6 +1210,67 @@ const replCommands: ReplCommand[] = [
     },
   },
   {
+    names: ["/undo"],
+    description: "撤销最近一个任务对文件的修改（只跟踪 write_file / edit_file）",
+    async run(): Promise<ReplAction> {
+      const plan = existsSync(active.writer.path)
+        ? planUndo(loadSession(active.writer.path).entries)
+        : undefined;
+
+      if (!plan) {
+        console.log("没有可以撤销的修改（只跟踪 write_file / edit_file 的改动）。");
+        return "continue";
+      }
+
+      const conflicts = new Set(await findConflicts(workspaceRoot, plan));
+
+      console.log(`\n将撤销任务「${oneLine(plan.taskText)}」对以下文件的修改：`);
+
+      for (const file of plan.files) {
+        const action = file.before === null
+          ? "删除（这个任务新建的）"
+          : "恢复到任务开始前";
+
+        const warning = conflicts.has(file.path)
+          ? "  ⚠ 任务之后又被改过，恢复会覆盖这些改动"
+          : "";
+
+        console.log(`  ${file.path}  ${action}${warning}`);
+      }
+
+      console.log("对话记录不会改变；run_command 造成的改动不在其中。");
+
+      const answer = await promptLine("确认撤销吗？[y/N] ");
+
+      if (answer?.trim().toLowerCase() !== "y") {
+        console.log("已取消。");
+        return "continue";
+      }
+
+      const failures = await applyUndo(workspaceRoot, plan);
+
+      if (failures.length > 0) {
+        for (const failure of failures) {
+          console.log(
+            `  恢复失败：${failure.path}：${failure.error instanceof Error ? failure.error.message : String(failure.error)}`,
+          );
+        }
+
+        console.log("有文件没有恢复成功，这次不记为已撤销；处理好之后可以再执行一次 /undo。");
+        return "continue";
+      }
+
+      active.writer.appendUndo({
+        taskEntryId: plan.taskEntryId,
+        files: plan.files.map((file) => file.path),
+      });
+
+      console.log(`已撤销 ${plan.files.length} 个文件。再执行 /undo 会继续撤销更早的任务。`);
+
+      return "continue";
+    },
+  },
+  {
     names: ["/exit", "/quit"],
     description: "退出（在提示符处按 Ctrl+C 或 Ctrl+D 也可以）",
     run() {
@@ -1285,8 +1352,14 @@ async function runRepl(): Promise<void> {
         continue;
       }
 
-      if ((await command.run(args)) === "exit") {
-        break;
+      try {
+        if ((await command.run(args)) === "exit") {
+          break;
+        }
+      } catch (error) {
+        console.error(
+          `[error] ${name}：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
 
       continue;

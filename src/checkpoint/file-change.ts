@@ -1,6 +1,13 @@
 import {
+  mkdir,
   readFile,
+  rm,
+  writeFile,
 } from "node:fs/promises";
+
+import {
+  dirname,
+} from "node:path";
 
 
 /** 文件在某一刻的内容；null 表示文件不存在 */
@@ -49,7 +56,7 @@ export async function snapshotFile(
 }
 
 
-function sameSnapshot(
+export function sameSnapshot(
   left: FileSnapshot,
   right: FileSnapshot,
 ): boolean {
@@ -97,4 +104,22 @@ export async function captureFileChange<T>(
       input.onRecordError?.(error);
     }
   }
+}
+
+/** 把文件写回某个快照；null 表示删除（这是任务里新建的文件） */
+export async function restoreSnapshot(
+  absolutePath: string,
+  snapshot: FileSnapshot,
+): Promise<void> {
+  if (snapshot === null) {
+    await rm(absolutePath, { force: true });
+    return;
+  }
+
+  // 父目录可能在任务之后被删了
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(
+    absolutePath,
+    Buffer.from(snapshot.content, snapshot.encoding),
+  );
 }

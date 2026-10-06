@@ -114,10 +114,19 @@ export type FileChangeEntry = EntryBase & {
 };
 
 
+/** 撤销记录：这个任务的文件变化已经恢复 */
+export type UndoEntry = EntryBase & {
+  type: "undo";
+  taskEntryId: string;
+  files: string[];
+};
+
+
 export type SessionEntry =
   | MessageEntry
   | CompactionEntry
-  | FileChangeEntry;
+  | FileChangeEntry
+  | UndoEntry;
 
 
 export type LoadedSession = {
@@ -411,6 +420,9 @@ export type SessionWriter = {
     before: FileSnapshot;
     after: FileSnapshot;
   }): string;
+
+  /** 追加一条撤销记录，返回条目 ID */
+  appendUndo(undo: { taskEntryId: string; files: string[] }): string;
 };
 
 
@@ -530,6 +542,20 @@ export function createSessionWriter(
         parentId: lastId,
         timestamp: new Date().toISOString(),
         ...change,
+      };
+
+      write(entry);
+
+      return entry.id;
+    },
+
+    appendUndo(undo) {
+      const entry: UndoEntry = {
+        type: "undo",
+        id: generateId(ids),
+        parentId: lastId,
+        timestamp: new Date().toISOString(),
+        ...undo,
       };
 
       write(entry);
