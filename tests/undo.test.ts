@@ -27,8 +27,10 @@ import type {
 
 import {
   applyUndo,
+  createUndoNote,
   findConflicts,
   planUndo,
+  unannouncedUndos,
   type UndoPlan,
 } from "../src/checkpoint/undo.js";
 
@@ -155,5 +157,47 @@ describe("findConflicts / applyUndo", () => {
     expect(await readFile(join(dir, "a.txt"), "utf8")).toBe("v1");
     await expect(stat(join(dir, "new.txt"))).rejects.toThrow();
     expect((await readFile(join(dir, "bin.dat"))).equals(binary)).toBe(true);
+  });
+});
+
+describe("unannouncedUndos / createUndoNote", () => {
+  it("announces undos made after the last message, and only once", () => {
+    const entries: SessionEntry[] = [
+      userEntry("t1", "任务一"),
+      changeEntry("c1", "t1", "a.txt", "v0", "v1"),
+      userEntry("t2", "任务二"),
+      changeEntry("c2", "t2", "b.txt", null, "b1"),
+      {
+        type: "undo", id: "u1", parentId: null, timestamp: "",
+        taskEntryId: "t2", files: ["b.txt"],
+      },
+      {
+        type: "undo", id: "u2", parentId: null, timestamp: "",
+        taskEntryId: "t1", files: ["a.txt"],
+      },
+    ];
+
+    const undos = unannouncedUndos(entries);
+
+    expect(undos).toEqual([
+      { taskText: "任务二", files: ["b.txt"] },
+      { taskText: "任务一", files: ["a.txt"] },
+    ]);
+
+    const note = createUndoNote(undos);
+
+    expect(note?.role).toBe("user");
+    expect(note?.content).toContain("任务二");
+    expect(note?.content).toContain("b.txt");
+    expect(note?.content).toContain("a.txt");
+
+    // 说明作为消息写进会话之后，就不再重复
+    entries.push(
+      userEntry("n1", "[Note from the harness] ..."),
+      userEntry("t3", "任务三"),
+    );
+
+    expect(unannouncedUndos(entries)).toEqual([]);
+    expect(createUndoNote([])).toBeUndefined();
   });
 });

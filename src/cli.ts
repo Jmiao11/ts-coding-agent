@@ -37,8 +37,10 @@ import {
 
 import {
   applyUndo,
+  createUndoNote,
   findConflicts,
   planUndo,
+  unannouncedUndos,
 } from "./checkpoint/undo.js";
 
 import type {
@@ -955,8 +957,21 @@ async function runTask(
   current = emptyStats();
   interrupted = false;
 
+  // 上次 /undo 之后还没告诉过模型：把说明作为单独一条消息，放在这次输入前面
+  const note = existsSync(active.writer.path)
+    ? createUndoNote(unannouncedUndos(loadSession(active.writer.path).entries))
+    : undefined;
+
+  if (note) {
+    console.log("（已在这次任务前告诉模型：之前的修改被撤销了）");
+  }
+
   try {
-    await agent.prompt(task);
+    await agent.prompt(
+      note
+        ? [note, { role: "user", content: task, timestamp: Date.now() }]
+        : task,
+    );
   } catch (error) {
     if (error instanceof BudgetExceededError) {
       console.error(`\n[stopped] ${error.message}`);

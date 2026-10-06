@@ -3,6 +3,10 @@ import {
 } from "../context/token-estimate.js";
 
 import type {
+  UserMessage,
+} from "../ai/types.js";
+
+import type {
   SessionEntry,
 } from "../session/session-store.js";
 
@@ -35,6 +39,21 @@ export type UndoPlan = {
 
   files: UndoFile[];
 };
+
+
+/** 发起任务的 user 消息原文 */
+function taskTextOf(
+  entries: SessionEntry[],
+  taskEntryId: string,
+): string {
+  const task = entries.find(
+    (entry) => entry.type === "message" && entry.id === taskEntryId,
+  );
+
+  return task?.type === "message" && task.message.role === "user"
+    ? textOf(task.message.content)
+    : "";
+}
 
 
 /**
@@ -84,16 +103,11 @@ export function planUndo(
       continue;
     }
 
-    const task = entries.find(
-      (entry) => entry.type === "message" && entry.id === taskEntryId,
-    );
-
-    const taskText =
-      task?.type === "message" && task.message.role === "user"
-        ? textOf(task.message.content)
-        : "";
-
-    return { taskEntryId, taskText, files: changed };
+    return {
+      taskEntryId,
+      taskText: taskTextOf(entries, taskEntryId),
+      files: changed,
+    };
   }
 
   return undefined;
@@ -154,4 +168,66 @@ export async function applyUndo(
   }
 
   return failures;
+}
+
+export type AnnouncedUndo = {
+  taskText: string;
+  files: string[];
+};
+
+
+/**
+ * 还没告诉过模型的撤销：最后一条消息之后的 undo 条目。
+ * 说明一旦作为消息写进会话，这些撤销就不再位于「最后一条消息之后」。
+ */
+export function unannouncedUndos(
+  entries: SessionEntry[],
+): AnnouncedUndo[] {
+  let lastMessage = -1;
+
+  entries.forEach((entry, index) => {
+    if (entry.type === "message") {
+      lastMessage = index;
+    }
+  });
+
+  return entries.slice(lastMessage + 1).flatMap((entry) =>
+    entry.type === "undo"
+      ? [{ taskText: taskTextOf(entries, entry.taskEntryId), files: entry.files }]
+      : [],
+  );
+}
+
+
+/** 发给模型的说明：对话里还留着那些修改，但文件已经恢复了 */
+export function createUndoNote(
+  undos: AnnouncedUndo[],
+): UserMessage | undefined {
+  if (undos.length === 0) {
+    return undefined;
+  }
+
+  const lines = [
+    "[Note from the harness, not written by the user] The user ran /undo. The file changes made by the task(s) below were reverted: each listed file is back to its content from before that task, and files the task had created were deleted.",
+  ];
+
+  for (const undo of undos) {
+    const request = undo.taskText.replace(/\s+/g, " ").trim().slice(0, 200);
+
+    lines.push(`- Task: ${request}`);
+
+    for (const file of undo.files) {
+      lines.push(`  - ${file}`);
+    }
+  }
+
+  lines.push(
+    "The conversation above still shows those edits. Do not assume they are present; read a file again before relying on its content.",
+  );
+
+  return {
+    role: "user",
+    content: lines.join("\n"),
+    timestamp: Date.now(),
+  };
 }
