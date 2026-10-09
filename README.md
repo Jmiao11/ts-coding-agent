@@ -84,24 +84,24 @@ node /path/to/ts-coding-agent/dist/cli.js -c
 
 ```mermaid
 flowchart TB
-    U[用户 / CLI · REPL] --> A[Agent · 任务与状态]
-    A --> L[Agent Loop]
+    U["用户 / CLI · REPL"] --> A["Agent · 任务与状态"]
+    A --> L["Agent Loop"]
 
-    L --> C[Context · Token 估算与 Compaction]
-    C --> P[OpenAI-compatible Provider]
-    P <--> M[LLM API]
+    L --> C["Context · Token 估算与 Compaction"]
+    C --> P["OpenAI-compatible Provider"]
+    P <--> M["LLM API"]
     P --> L
 
-    L --> H[ExtensionHost · Lifecycle Hooks]
-    H --> B[Budget · Command Approval · Logger]
-    H --> T[6 个 Coding Tools]
+    L --> H["ExtensionHost · Lifecycle Hooks"]
+    H --> B["Budget · Command Approval · Logger"]
+    H --> T["6 个 Coding Tools"]
     T --> L
 
-    A --> E[Agent Events · subscribe]
-    E --> S[(JSONL Session)]
-    T --> F[文件改动前后快照]
+    A --> E["Agent Events · subscribe"]
+    E --> S[("JSONL Session")]
+    T --> F["文件改动前后快照"]
     F --> S
-    U --> D[/undo · 冲突检查与恢复]
+    U --> D["/undo · 冲突检查与恢复"]
     D --> S
 ```
 
