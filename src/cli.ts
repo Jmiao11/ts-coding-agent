@@ -133,8 +133,8 @@ const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
 
 const HELP = `用法：
-  agent-harness [选项] "任务描述"   运行一个任务后退出
-  agent-harness [选项]              交互模式：连续输入多个任务（需要交互式终端）
+  ts-coding-agent [选项] "任务描述"   运行一个任务后退出
+  ts-coding-agent [选项]              交互模式：连续输入多个任务（需要交互式终端）
 
 在 Git 仓库里运行 coding agent。改动不会自动提交，请用 git diff 审查。
 
@@ -1022,7 +1022,7 @@ function printPreviousSession(
   console.log(`上一个会话：${previous.path}`);
 
   console.log(
-    `回到它：/resume ${id}（或退出后 agent-harness --session ${id}）`,
+    `回到它：/resume ${id}（或退出后 ts-coding-agent --session ${id}）`,
   );
 }
 
@@ -1417,7 +1417,7 @@ if (interactive) {
 // 新会话里一个任务都没跑的话，文件还没创建
 if (existsSync(active.writer.path)) {
   console.log(`\n会话记录：${active.writer.path}`);
-  console.log("继续这个会话：agent-harness -c");
+  console.log("继续这个会话：ts-coding-agent -c");
 }
 
 console.log(

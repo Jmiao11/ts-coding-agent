@@ -1,16 +1,20 @@
-# agent-harness
+# TS Coding Agent — A lightweight TypeScript Coding Agent Runtime inspired by Pi.
 
-一个**学习用途的 TypeScript coding agent runtime**，实验性质。
+从 Agent Loop 出发，自主实现工具调用、上下文压缩、持久化会话与文件撤销，用于探索 Coding Agent 的底层工程机制。
 
-它提供一个 CLI 命令 `agent-harness`：在（必须是）Git 仓库里跑一个 agent loop，模型可以调用文件工具和 shell 命令来完成任务，并且会在终端里告诉你做了什么、花了多少 token。
+架构参考 [Pi](https://github.com/earendil-works/pi)（原 `badlogic/pi-mono`），感谢 Mario Zechner 与 Pi 贡献者。本项目不是 Pi 官方发行版；Pi 采用 [MIT License](https://github.com/earendil-works/pi/blob/main/LICENSE)。
 
-> 实验项目，不是产品：接口、行为和目录结构都还在变，也没有做安全隔离。请只在你愿意随时回滚的仓库里试。
+压缩总结模板沿用 Pi 的章节结构，对应来源与版权声明见 [第三方许可说明](THIRD_PARTY_NOTICES.md)。
+
+它提供一个 CLI 命令 `ts-coding-agent`：在（必须是）Git 仓库里跑一个 agent loop，模型可以调用文件工具和 shell 命令来完成任务，并且会在终端里告诉你做了什么、花了多少 token。
+
+> **Preview / Experimental**：接口、行为和目录结构都还在变。没有完整沙箱，命令可能修改工作区外的文件；请只在你愿意随时回滚的仓库里试。
 
 ---
 
 ## 环境要求
 
-- **Node.js**：CLI 用到了 `process.loadEnvFile`，需要 Node ≥ 20.12
+- **Node.js**：需要 Node ≥ 24
 - **pnpm**：`package.json` 的 `packageManager` 固定为 `pnpm@12.5.1`
 - **git**：CLI 启动时会检查工作目录是不是 Git 仓库
 
@@ -48,7 +52,8 @@ pnpm build
 ```env
 AGENT_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 AGENT_BASE_URL=https://api.deepseek.com
-AGENT_MODEL=deepseek-v4-flash
+AGENT_MODEL=deepseek-flash
+AGENT_THINKING=disabled
 ```
 
 几点说明：
@@ -57,11 +62,18 @@ AGENT_MODEL=deepseek-v4-flash
 - `run_command` 启动子进程时会把所有 `AGENT_` 开头的变量删掉，不会把 key 交给模型能执行的命令。
 - 仓库根目录的 `.env` **不是** CLI 读的那份（CLI 只读主目录的 env 文件或 `--env-file`）。`src/examples/` 下的示例是从 `process.env` 读配置的。
 
-## 注册 agent-harness 命令
+## 启动与注册 ts-coding-agent 命令
 
-不想全局安装的话，直接用 `node <仓库>/dist/cli.js "任务"` 也行。下面是两种注册方式。
+从源码构建后，在仓库根目录直接启动，无需配置 PowerShell Profile 函数或 shell alias：
 
-### 方式一：用 `package.json` 的 `bin` 字段全局安装（Windows / macOS / Linux 通用）
+```bash
+node dist/cli.js --help
+node dist/cli.js "任务描述"
+```
+
+在其他 Git 仓库中使用时，指定构建入口的绝对路径：`node <仓库绝对路径>/dist/cli.js "任务描述"`。当前不发布 npm 包，以下命令从本地源码安装。
+
+### 可选：用 `package.json` 的 `bin` 字段全局安装（Windows / macOS / Linux 通用）
 
 在仓库根目录执行：
 
@@ -69,45 +81,23 @@ AGENT_MODEL=deepseek-v4-flash
 pnpm add -g .
 ```
 
-这会把 `agent-harness` 装进 pnpm 的全局 bin 目录（Windows 上会生成 `agent-harness`、`agent-harness.cmd`、`agent-harness.ps1` 三个 shim）。前提是那个目录在 `PATH` 里，否则会报：
+这会把 `ts-coding-agent` 装进 pnpm 的全局 bin 目录（Windows 上会生成 `ts-coding-agent`、`ts-coding-agent.cmd`、`ts-coding-agent.ps1` 三个 shim）。前提是那个目录在 `PATH` 里，否则会报：
 
 ```
 Error: ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH
 help: Run "pnpm setup" to update your shell configuration.
 ```
 
-遇到这个就按提示跑 `pnpm setup`，然后重开终端。卸载用 `pnpm remove -g agent-harness`。
+遇到这个就按提示跑 `pnpm setup`，然后重开终端。卸载用 `pnpm remove -g ts-coding-agent`。
 
 注意：pnpm 12 里 `pnpm link --global` 已经不可用（会报 `unexpected argument '--global'`），用上面的 `pnpm add -g .`。
-
-### 方式二：Windows PowerShell 里加一个函数
-
-编辑你的 profile（`$PROFILE` 指向的文件，不存在就先 `New-Item -Path $PROFILE -ItemType File -Force`），加上：
-
-```powershell
-function agent-harness {
-  node "F:\path\to\agent-harness\dist\cli.js" @args
-}
-```
-
-重开 PowerShell，或者 `. $PROFILE` 让它立即生效。
-
-### 方式三：macOS/Linux 加一个 alias
-
-写进 `~/.zshrc`（bash 用户写 `~/.bashrc`）：
-
-```bash
-alias agent-harness="node /path/to/agent-harness/dist/cli.js"
-```
-
-然后 `source ~/.zshrc`。
 
 ## 用法和选项
 
 ```bash
-agent-harness "修复 tests/foo.test.ts 里失败的测试"
-agent-harness -w ../some-repo "解释 src/agent/agent-loop.ts 的用途"
-agent-harness -m deepseek-flash "跑一遍测试，并说明失败原因"
+ts-coding-agent "修复 tests/foo.test.ts 里失败的测试"
+ts-coding-agent -w ../some-repo "解释 src/agent/agent-loop.ts 的用途"
+ts-coding-agent -m deepseek-flash "跑一遍测试，并说明失败原因"
 ```
 
 选项：
@@ -178,7 +168,7 @@ agent 可用的工具：`list_directory`、`read_file`、`search_text`、`write_
 - **冲突会标出来。** 某个文件在任务结束后又被改过（你手动改的、`run_command` 改的，或者被删了），那一行会带 `⚠ 任务之后又被改过，恢复会覆盖这些改动`；撤销照常执行，但会覆盖这些更晚的改动。
 - **任务新建的文件会被删除**（撤销前那个文件不存在）。
 - **撤销不改变对话记录。** 对话里仍然留着那些编辑，所以**下一次任务开始前会自动发一条说明告诉模型哪些修改被撤销了**（终端也会打印一行 `（已在这次任务前告诉模型：之前的修改被撤销了）`），让模型不要以为那些改动还在。
-- **撤销记录保存在会话文件里**（`file_change` / `undo` 条目，见「会话记录」），所以退出后用 `agent-harness -c` 回来仍然可以继续往前撤销。
+- **撤销记录保存在会话文件里**（`file_change` / `undo` 条目，见「会话记录」），所以退出后用 `ts-coding-agent -c` 回来仍然可以继续往前撤销。
 - **撤销不能替代 Git。** 它只覆盖它自己跟踪的写工具改动，不覆盖 `run_command`、也不覆盖你已经 commit 的内容；提交前仍然要用 `git diff` 审查。
 
 ## 运行时会看到什么
@@ -204,7 +194,7 @@ agent 可用的工具：`list_directory`、`read_file`、`search_text`、`write_
 
 - `模型调用次数：`、`执行过的工具：`，以及 token 用量（`input` / `cachedInput` / `output` / `peakInput`，有压缩时还有压缩用的 token 和合计）
 - 交互模式下跑过多个任务时，额外打印全部任务的 token 合计
-- 会话文件存在时打印 `会话记录：<路径>` 和 `继续这个会话：agent-harness -c`
+- 会话文件存在时打印 `会话记录：<路径>` 和 `继续这个会话：ts-coding-agent -c`
 - 最后打印 `请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。`
 
 退出码：
@@ -256,7 +246,7 @@ pnpm test:watch    # vitest watch
 - `-c` 选的是该 workspace 下**最近活动**（文件 mtime 最新）的那个会话
 - `-r` 需要交互式终端：先列出最近活动的 20 个会话（每行显示活动时间、id 前 8 位、消息条数、是否压缩过，以及首条/最后一条用户消息），再提示「继续哪一个？输入编号（直接回车取消）」；直接回车或输入无效编号都会打印「已取消。」并以退出码 0 结束。更早的会话不会列出，用 `--session <id>` 按 id 前缀指定（前缀能匹配多个会话时会要求你多写几位）
 
-`-c` / `-r` / `--session` 只是选会话（见「用法和选项」）：不写任务描述就进入交互模式，写了任务描述就跑一次后退出。启动和结束时都会打印会话文件路径，结束时还会提示用 `agent-harness -c` 继续这个会话。
+`-c` / `-r` / `--session` 只是选会话（见「用法和选项」）：不写任务描述就进入交互模式，写了任务描述就跑一次后退出。启动和结束时都会打印会话文件路径，结束时还会提示用 `ts-coding-agent -c` 继续这个会话。
 
 代码结构：
 

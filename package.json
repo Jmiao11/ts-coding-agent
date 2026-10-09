@@ -1,16 +1,30 @@
 {
-  "name": "agent-harness",
-  "version": "1.0.0",
-  "description": "",
+  "name": "ts-coding-agent",
+  "version": "0.1.0",
+  "description": "A lightweight TypeScript coding agent runtime with tool calling, context compaction, persistent sessions, and file undo.",
+  "author": "Jmiao11",
+  "license": "MIT",
+  "private": true,
+  "keywords": [
+    "coding-agent",
+    "agent-runtime",
+    "typescript",
+    "llm",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+
+  "bin": {
+    "ts-coding-agent": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
@@ -20,9 +34,6 @@
   },
   "packageManager": "pnpm@12.5.1",
   "type": "module",
-  "bin": {
-    "agent-harness": "dist/cli.js"
-  },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2",

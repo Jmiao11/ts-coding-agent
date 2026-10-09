@@ -1,5 +1,12 @@
 .env
+.env.*
+!.env.example
+.agent-harness.env
 node_modules/
 dist/
 .idea/
 note.md
+SOURCE_SNAPSHOT_*.md
+HANDOFF_*.md
+.agent-harness/
+.vscode/
