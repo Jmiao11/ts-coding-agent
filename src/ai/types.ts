@@ -14,6 +14,16 @@ export type ToolCall = {
 };
 
 
+/**
+ * 推理模型的思考过程（DeepSeek 的 reasoning_content）。
+ * 开启 thinking 且带工具时，之后的每次请求都必须原样回传，否则 400。
+ */
+export type ThinkingContent = {
+  type: "thinking";
+  thinking: string;
+};
+
+
 export type SystemMessage = {
   role: "system";
   content: string;
@@ -41,7 +51,7 @@ export type Usage = {
 
 export type AssistantMessage = {
   role: "assistant";
-  content: Array<TextContent | ToolCall>;
+  content: Array<ThinkingContent | TextContent | ToolCall>;
 
   provider: string;
   model: string;
