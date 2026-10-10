@@ -101,6 +101,11 @@ async function executeToolCall(
     );
   }
 
+  // 钩子可能是异步的：等待期间用户按了 Ctrl+C，钩子却放行了，也不能再执行
+  if (signal?.aborted) {
+    return createToolErrorMessage(toolCall, NOT_RUN_AFTER_ABORT);
+  }
+
   const tool = context.tools?.find(
     (candidate) => candidate.name === toolCall.name,
   );
