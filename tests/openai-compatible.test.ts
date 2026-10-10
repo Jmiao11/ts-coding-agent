@@ -507,6 +507,27 @@ describe("parseOpenAIStreamData", () => {
 
 
 describe("createOpenAICompatibleStreamFn", () => {
+  it("truncates long HTTP error bodies", async () => {
+    const body = `<html>${"x".repeat(10_000)}</html>`;
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(body, { status: 502 }));
+    const config = { apiKey: "test-key", baseUrl: "https://example.com/v1" };
+    const stream = await createOpenAICompatibleStreamFn(config)(model, context, undefined);
+    let errorMessage: string | undefined;
+
+    for await (const event of stream) {
+      if (event.type === "error") {
+        errorMessage = event.error.errorMessage;
+      }
+    }
+
+    expect(errorMessage?.startsWith("Provider HTTP 502: <html>")).toBe(true);
+    expect(errorMessage?.length).toBeLessThan(2_100);
+    expect(errorMessage).toContain("more characters truncated]");
+    await expect(requestChatCompletionOnce(config, model, context))
+      .rejects.toThrow(errorMessage);
+  });
+
   it("merges extraBody into the request without overriding standard fields", async () => {
     const encoder = new TextEncoder();
 
