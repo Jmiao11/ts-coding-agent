@@ -151,7 +151,7 @@ const HELP = `用法：
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
-  可选：AGENT_THINKING=disabled（DeepSeek：显式关闭 thinking）
+  可选：AGENT_THINKING=enabled 或 disabled（DeepSeek：显式开启或关闭 thinking）
 
 交互模式：/exit、Ctrl+C 或 Ctrl+D 退出；任务运行中按 Ctrl+C 只中止当前任务。
 任何时候连按两次 Ctrl+C 都会强制退出。`;
@@ -253,13 +253,17 @@ const apiKey = requiredEnv("AGENT_API_KEY");
 const baseUrl = requiredEnv("AGENT_BASE_URL");
 const modelId = values.model ?? requiredEnv("AGENT_MODEL");
 
-// DeepSeek 默认开启 thinking；开启时带 tools 的请求必须回传每轮的 reasoning_content，
-// 我们还不支持，所以目前只允许显式关闭。不设置就什么都不发（其他 Provider 可能不认识这个字段）。
+// DeepSeek 的 thinking 开关。开启时思考过程存进消息的 thinking 块，之后每次请求原样回传。
+// 不设置就什么都不发，用 Provider 的默认值（其他 Provider 可能不认识这个字段）。
 const thinking = process.env.AGENT_THINKING || undefined;
 
-if (thinking !== undefined && thinking !== "disabled") {
+if (
+  thinking !== undefined
+  && thinking !== "enabled"
+  && thinking !== "disabled"
+) {
   fail(
-    `AGENT_THINKING 目前只支持 disabled（收到：${thinking}）。开启 thinking 需要先支持回传 reasoning_content。`,
+    `AGENT_THINKING 只能是 enabled 或 disabled（收到：${thinking}）。`,
   );
 }
 
@@ -723,8 +727,8 @@ const model = {
 const streamFn = createOpenAICompatibleStreamFn({
   apiKey,
   baseUrl,
-  ...(thinking === "disabled"
-    ? { extraBody: { thinking: { type: "disabled" } } }
+  ...(thinking !== undefined
+    ? { extraBody: { thinking: { type: thinking } } }
     : {}),
 });
 
@@ -938,6 +942,17 @@ agent.subscribe((event) => {
       current.cached += usage.cacheRead ?? 0;
       current.output += usage.output;
       current.peakInput = Math.max(current.peakInput, usage.input);
+    }
+
+    // 思考过程可能很长，只打印长度
+    const thinkingChars = event.message.content.reduce(
+      (sum, item) =>
+        item.type === "thinking" ? sum + item.thinking.length : sum,
+      0,
+    );
+
+    if (thinkingChars > 0) {
+      console.log(`[thinking] ${thinkingChars} 字符`);
     }
 
     const text = event.message.content
