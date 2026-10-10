@@ -399,6 +399,10 @@ export function createOpenAICompatibleStreamFn(
        * "你好"
        */
       let fullText = "";
+
+      /** 到目前为止的完整思考过程 */
+      let fullReasoning = "";
+
       let usage: Usage | undefined;
       let finishReason: string | undefined;
 
@@ -548,6 +552,12 @@ export function createOpenAICompatibleStreamFn(
             finishReason = chunkFinish;
           }
 
+          const reasoningDelta = extractReasoningDelta(data);
+
+          if (reasoningDelta) {
+            fullReasoning += reasoningDelta;
+          }
+
 
           /**
            * 第三层：
@@ -652,6 +662,8 @@ export function createOpenAICompatibleStreamFn(
                 message.usage = usage;
               }
 
+              addThinking(message, fullReasoning);
+
 
               stream.push({
                 type: "done",
@@ -695,6 +707,8 @@ export function createOpenAICompatibleStreamFn(
         if (usage) {
           message.usage = usage;
         }
+
+        addThinking(message, fullReasoning);
 
         stream.push({
           type: "done",
@@ -1318,6 +1332,35 @@ type OpenAIUsage = {
 
 
 /**
+ * 取出 chunk 里的思考过程增量（DeepSeek：delta.reasoning_content）。
+ * 和 extractOpenAIUsage 一样单独提取，不改 parseOpenAIStreamData：
+ * 同一个 chunk 里可能既有 reasoning_content 又有 content，不能只返回一种。
+ */
+export function extractReasoningDelta(
+  data: string,
+): string | undefined {
+  if (data === "[DONE]") {
+    return undefined;
+  }
+
+  try {
+    const chunk = JSON.parse(data) as {
+      choices?: Array<{ delta?: { reasoning_content?: string | null } }>;
+    };
+
+    const reasoning = chunk.choices?.[0]?.delta?.reasoning_content;
+
+    // 第一个 chunk 是空字符串，跳过
+    return typeof reasoning === "string" && reasoning.length > 0
+      ? reasoning
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
+/**
  * 取出 chunk 里的 finish_reason。
  * 只用它来识别 "length"（输出被截断）；其余情况仍按有没有 tool call 判断。
  */
@@ -1439,6 +1482,20 @@ function finalizeToolCalls(
     });
 }
 
+
+
+/** 有思考过程就放在内容最前面：回传时按原样还原成 reasoning_content */
+function addThinking(
+  message: AssistantMessage,
+  reasoning: string,
+): void {
+  if (reasoning.length > 0) {
+    message.content.unshift({
+      type: "thinking",
+      thinking: reasoning,
+    });
+  }
+}
 
 
 // Provider 收到模型 SSE

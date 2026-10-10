@@ -528,6 +528,76 @@ describe("createOpenAICompatibleStreamFn", () => {
       .rejects.toThrow(errorMessage);
   });
 
+  it("collects streamed reasoning_content into a thinking block before the text and tool calls", async () => {
+    const encoder = new TextEncoder();
+
+    // 按第 0 步实测的 DeepSeek 格式：第一个 chunk 是 reasoning_content: ""、content: null
+    function sse(chunks: unknown[]): Response {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+
+      return new Response(body, { status: 200 });
+    }
+
+    function delta(value: Record<string, unknown>, finish: string | null = null) {
+      return { choices: [{ index: 0, delta: value, finish_reason: finish }] };
+    }
+
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(sse([
+        delta({ role: "assistant", content: null, reasoning_content: "" }),
+        delta({ content: null, reasoning_content: "想一想" }),
+        delta({ content: null, reasoning_content: "，答案是 2" }),
+        delta({ content: "2" }, "stop"),
+      ]))
+      .mockResolvedValueOnce(sse([
+        delta({ content: null, reasoning_content: "先读文件" }),
+        delta({
+          tool_calls: [{
+            index: 0,
+            id: "call-1",
+            type: "function",
+            function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+          }],
+        }, "tool_calls"),
+      ]));
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    async function finalMessage(): Promise<AssistantMessage | undefined> {
+      let done: AssistantMessage | undefined;
+
+      for await (const event of await streamFn(model, context, undefined)) {
+        if (event.type === "done") {
+          done = event.message;
+        }
+      }
+
+      return done;
+    }
+
+    expect((await finalMessage())?.content).toEqual([
+      { type: "thinking", thinking: "想一想，答案是 2" },
+      { type: "text", text: "2" },
+    ]);
+
+    expect((await finalMessage())?.content).toEqual([
+      { type: "thinking", thinking: "先读文件" },
+      { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+    ]);
+  });
+
   it("merges extraBody into the request without overriding standard fields", async () => {
     const encoder = new TextEncoder();
 
