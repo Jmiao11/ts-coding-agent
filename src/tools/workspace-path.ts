@@ -35,6 +35,14 @@ export function resolveWorkspacePath(
     );
   }
 
+  // Windows 文件名里不能有冒号；有冒号就是 NTFS 备用数据流（.env::$DATA 读的就是 .env，
+  // a.ts:hidden 写进去的内容 git diff 看不到）
+  if (process.platform === "win32" && relativePath.includes(":")) {
+    throw new Error(
+      `Path names an NTFS alternate data stream, which is not allowed: ${requestedPath}`,
+    );
+  }
+
   // 不允许路径中的现有部分是符号链接，以免链接指向 workspace 外。
   let current = root;
 
@@ -76,8 +84,10 @@ export function resolveWorkspacePath(
 export function isSecretFile(
   relativePath: string,
 ): boolean {
-  const name =
-    relativePath.split("/").at(-1) ?? "";
+  // 按操作系统的规则比较：.ENV、Windows 上的 ".env." 打开的都是 .env
+  const name = comparablePart(
+    relativePath.split(/[\\/]/).at(-1) ?? "",
+  );
 
   return (
     /^\.env(\..+)?$/.test(name)
@@ -88,13 +98,27 @@ export function isSecretFile(
 
 export function assertNotSecretFile(
   relativePath: string,
+  absolutePath?: string,
 ): void {
-  if (isSecretFile(relativePath)) {
+  if (
+    isSecretFile(relativePath)
+    || (absolutePath !== undefined && isSecretOnDisk(absolutePath))
+  ) {
     throw new Error(
       `Access to ${relativePath} is blocked because it may contain secrets. Do not try to read it another way (for example with run_command); if you need a value from it, ask the user.`,
     );
   }
 }
+
+/** 文件已存在时看它在磁盘上的真名：8.3 短名（ENV~1）之类的别名也能认出来 */
+function isSecretOnDisk(
+  absolutePath: string,
+): boolean {
+  const { existing, rest } = canonicalize(absolutePath);
+
+  return rest.length === 0 && isSecretFile(basename(existing));
+}
+
 
 /** 已存在的部分交给操作系统规范化，尚不存在的部分放进 rest。 */
 function canonicalize(

@@ -29,6 +29,7 @@ import {
   applyUndo,
   createUndoNote,
   findConflicts,
+  findNewConflicts,
   planUndo,
   unannouncedUndos,
   type UndoPlan,
@@ -124,6 +125,30 @@ describe("planUndo", () => {
   });
 });
 
+
+describe("findNewConflicts", () => {
+  it("reports only conflicts that appeared during confirmation", async () => {
+    root = await mkdtemp(join(tmpdir(), "agent-undo-"));
+    const dir = root;
+    await writeFile(join(dir, "a.txt"), "v3");
+    await writeFile(join(dir, "b.txt"), "user edit");
+    const plan: UndoPlan = {
+      taskEntryId: "t1",
+      taskText: "任务一",
+      files: [
+        { path: "a.txt", before: text("v1"), after: text("v3") },
+        { path: "b.txt", before: text("b0"), after: text("b1") },
+      ],
+    };
+    const shown = new Set(await findConflicts(dir, plan));
+    expect([...shown]).toEqual(["b.txt"]);
+    expect(await findNewConflicts(dir, plan, shown)).toEqual([]);
+
+    await writeFile(join(dir, "a.txt"), "edited meanwhile");
+    await writeFile(join(dir, "b.txt"), "user edit 2");
+    expect(await findNewConflicts(dir, plan, shown)).toEqual(["a.txt"]);
+  });
+});
 
 describe("findConflicts / applyUndo", () => {
   it("restores files to before the task, deletes files it created, and reports files changed afterwards", async () => {

@@ -21,7 +21,16 @@ import {
 
 import {
   createReadFileTool,
+  MAX_OUTPUT_CHARS,
 } from "../src/tools/read-file.js";
+
+import {
+  createSearchTextTool,
+} from "../src/tools/search-text.js";
+
+import {
+  createWriteFileTool,
+} from "../src/tools/write-file.js";
 
 
 let tempDirectory:
@@ -45,6 +54,28 @@ afterEach(async () => {
 
 
 describe("read_file", () => {
+  it("caps overlong lines and reports where they were cut", async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), "agent-harness-"));
+    await writeFile(join(tempDirectory, "min.js"), "a".repeat(100_000));
+    await writeFile(join(tempDirectory, "data.txt"), `short\n${"b".repeat(50_000)}\n`);
+
+    const tool = createReadFileTool(tempDirectory);
+    const single = await tool.execute("call-1", { path: "min.js" });
+    const singleText = single.content[0]?.text ?? "";
+    expect(singleText.length).toBeLessThan(MAX_OUTPUT_CHARS + 200);
+    expect(singleText).toContain(`line 1 was cut to ${MAX_OUTPUT_CHARS} of 100000 characters`);
+
+    const first = await tool.execute("call-2", { path: "data.txt" });
+    expect(first.content[0]?.text).toBe(
+      "short\n\n[showing lines 1-1 of 2; use offset=2 to read more]",
+    );
+
+    const next = await tool.execute("call-3", { path: "data.txt", offset: 2 });
+    const nextText = next.content[0]?.text ?? "";
+    expect(nextText.length).toBeLessThan(MAX_OUTPUT_CHARS + 200);
+    expect(nextText).toContain(`line 2 was cut to ${MAX_OUTPUT_CHARS} of 50000 characters`);
+  });
+
   it(
     "reads a UTF-8 file inside the workspace",
     async () => {
@@ -213,6 +244,77 @@ describe("read_file", () => {
       });
 
       expect(example.content[0]?.text).toBe("AGENT_API_KEY=");
+    },
+  );
+  it(
+    "blocks .env however the name is spelled (case, Windows trailing dots/spaces and stream names)",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      await writeFile(
+        join(tempDirectory, ".env"),
+        "AGENT_API_KEY=secret",
+        "utf8",
+      );
+
+      const read = createReadFileTool(tempDirectory);
+      const search = createSearchTextTool(tempDirectory);
+      const write = createWriteFileTool(tempDirectory);
+
+      // Windows、macOS 默认不区分大小写：.ENV 就是 .env
+      const spellings = [
+        ".ENV",
+        ".Env.Local",
+        ...(process.platform === "win32"
+          ? [".env.", ".env ", ".env::$DATA", ".ENV:$DATA"]
+          : []),
+      ];
+
+      for (const path of spellings) {
+        await expect(
+          read.execute("call-1", { path }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+
+        await expect(
+          search.execute("call-2", { pattern: "AGENT", path }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+
+        await expect(
+          write.execute("call-3", { path, content: "x" }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+      }
+
+      // .env.example 仍然可读，不论大小写
+      await writeFile(
+        join(tempDirectory, ".env.example"),
+        "AGENT_API_KEY=",
+        "utf8",
+      );
+
+      await expect(
+        read.execute("call-4", { path: ".env.example" }),
+      ).resolves.toBeDefined();
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "refuses NTFS alternate data streams, which git diff does not show",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      await writeFile(join(tempDirectory, "notes.txt"), "hi", "utf8");
+
+      const write = createWriteFileTool(tempDirectory);
+
+      await expect(
+        write.execute("call-1", { path: "notes.txt:hidden", content: "payload" }),
+      ).rejects.toThrow("alternate data stream");
     },
   );
 });

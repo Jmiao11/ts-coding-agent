@@ -173,7 +173,7 @@ export function createSearchTextTool(
         parameters.path ?? ".",
       );
 
-      assertNotSecretFile(relativePath);
+      assertNotSecretFile(relativePath, absolutePath);
 
       let matcher: RegExp;
 

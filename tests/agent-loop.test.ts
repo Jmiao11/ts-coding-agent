@@ -52,6 +52,66 @@ import {
 
 
 describe("runAgentLoop", () => {
+  it("does not run a tool when aborted while an async hook lets it through", async () => {
+    const controller = new AbortController();
+    const prompt: UserMessage = { role: "user", content: "write", timestamp: 1 };
+    const toolCallMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+      provider: "fake",
+      model: "fake-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "start", partial: toolCallMessage });
+      stream.push({ type: "done", reason: "toolUse", message: toolCallMessage });
+      stream.end();
+      return stream;
+    };
+    let executed = 0;
+    const parameters = Type.Object({});
+    const writeTool: AgentTool<typeof parameters, Record<string, never>> = {
+      name: "write",
+      label: "Write",
+      description: "Pretends to write a file.",
+      parameters,
+      async execute() {
+        executed += 1;
+        return { content: [{ type: "text", text: "written" }], details: {} };
+      },
+    };
+    const afterToolCall = vi.fn();
+    const events: AgentEvent[] = [];
+    const config: AgentLoopConfig = {
+      model: { id: "fake-model", provider: "fake", name: "Fake Model", contextWindow: 1000, maxTokens: 100 },
+      convertToLlm(messages) { return [...messages]; },
+      extensions: [{
+        name: "approval",
+        hooks: {
+          async beforeToolCall() {
+            controller.abort();
+            return undefined;
+          },
+          afterToolCall,
+        },
+      }],
+    };
+    const newMessages = await runAgentLoop(
+      [prompt], { messages: [], tools: [writeTool] }, config,
+      controller.signal, streamFn, (event) => { events.push(event); },
+    );
+    expect(executed).toBe(0);
+    expect(newMessages.filter((message) => message.role === "toolResult")).toMatchObject([{
+      toolCallId: "call-1",
+      isError: true,
+      content: [{ type: "text", text: "Not run: the user interrupted the run before this tool call started." }],
+    }]);
+    expect(afterToolCall).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type.startsWith("tool_execution_"))).toEqual([]);
+  });
+
   it("does not call the model again after the run is aborted during a tool call", async () => {
     const controller = new AbortController();
     const prompt: UserMessage = { role: "user", content: "run it", timestamp: 1 };

@@ -68,7 +68,7 @@ export function createWriteFileTool(
         );
       }
 
-      assertNotSecretFile(relativePath);
+      assertNotSecretFile(relativePath, absolutePath);
       assertNotInsideGitDir(workspaceRoot, absolutePath, relativePath);
 
       let created = false;

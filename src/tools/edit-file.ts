@@ -170,7 +170,7 @@ export function createEditFileTool(
         );
       }
 
-      assertNotSecretFile(relativePath);
+      assertNotSecretFile(relativePath, absolutePath);
       assertNotInsideGitDir(workspaceRoot, absolutePath, relativePath);
 
       const content =

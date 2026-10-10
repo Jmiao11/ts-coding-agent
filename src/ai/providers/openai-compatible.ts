@@ -55,6 +55,23 @@ export type OpenAICompatibleProviderConfig = {
 };
 
 
+/** 错误正文的上限：网关可能返回整页 HTML，原样打印会刷屏，还会写进会话 */
+const MAX_ERROR_BODY_CHARS = 2000;
+
+
+function httpErrorMessage(
+  status: number,
+  body: string,
+): string {
+  const shown =
+    body.length > MAX_ERROR_BODY_CHARS
+      ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… [${body.length - MAX_ERROR_BODY_CHARS} more characters truncated]`
+      : body;
+
+  return `Provider HTTP ${status}: ${shown}`;
+}
+
+
 type OpenAIFunctionTool = {
   type: "function";
 
@@ -459,7 +476,7 @@ export function createOpenAICompatibleStreamFn(
             await response.text();
 
           throw new Error(
-            `Provider HTTP ${response.status}: ${body}`,
+            httpErrorMessage(response.status, body),
           );
         }
 
@@ -859,7 +876,7 @@ export async function requestChatCompletionOnce(
       await response.text();
 
     throw new Error(
-      `Provider HTTP ${response.status}: ${body}`,
+      httpErrorMessage(response.status, body),
     );
   }
 
