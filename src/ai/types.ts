@@ -46,6 +46,9 @@ export type Usage = {
 
   /** 输入中命中 Provider 前缀缓存的部分（Provider 返回了才有） */
   cacheRead?: number;
+
+  /** output 里属于思考过程的部分（开启 thinking 且 Provider 返回了才有） */
+  reasoning?: number;
 };
 
 

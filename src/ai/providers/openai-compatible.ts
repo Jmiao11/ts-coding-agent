@@ -1349,6 +1349,11 @@ type OpenAIUsage = {
 
   // DeepSeek 的写法
   prompt_cache_hit_tokens?: number;
+
+  // 思考 token：已经包含在 completion_tokens 里
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  };
 };
 
 
@@ -1449,6 +1454,13 @@ export function extractOpenAIUsage(
 
   if (typeof cached === "number") {
     usage.cacheRead = cached;
+  }
+
+  const reasoning =
+    raw.completion_tokens_details?.reasoning_tokens;
+
+  if (typeof reasoning === "number") {
+    usage.reasoning = reasoning;
   }
 
   return usage;

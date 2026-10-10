@@ -1171,6 +1171,49 @@ describe("createOpenAICompatibleStreamFn", () => {
   });
 });
 
+  it("reads reasoning tokens from usage", async () => {
+    const encoder = new TextEncoder();
+
+    // 第 0 步实测的 DeepSeek usage：completion_tokens 包含 reasoning_tokens
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const data of [
+          '{"choices":[{"delta":{"content":"2"},"finish_reason":"stop"}]}',
+          '{"choices":[],"usage":{"prompt_tokens":41,"completion_tokens":45,"completion_tokens_details":{"reasoning_tokens":36},"prompt_cache_hit_tokens":0}}',
+          "[DONE]",
+        ]) {
+          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        }
+
+        controller.close();
+      },
+    });
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, { status: 200 }),
+    );
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    let done: AssistantMessage | undefined;
+
+    for await (const event of await streamFn(model, context, undefined)) {
+      if (event.type === "done") {
+        done = event.message;
+      }
+    }
+
+    expect(done?.usage).toEqual({
+      input: 41,
+      output: 45,
+      cacheRead: 0,
+      reasoning: 36,
+    });
+  });
+
   it("reads token usage from the final usage chunk", async () => {
     const encoder = new TextEncoder();
 
