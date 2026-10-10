@@ -85,6 +85,22 @@ async function createSession() {
 
 
 describe("session store", () => {
+  it("counts skipped malformed lines in the middle and at the end", async () => {
+    const { path, header } = await createSession();
+    createSessionWriter({ path, header }).appendMessage({
+      role: "user", content: "first", timestamp: 1,
+    });
+    await appendFile(path, '{"type":"message","id":"brok\n');
+    createSessionWriter({ path, header, entries: loadSession(path).entries }).appendMessage({
+      role: "user", content: "next", timestamp: 2,
+    });
+    await appendFile(path, '{"type":"mess');
+
+    const loaded = loadSession(path);
+    expect(loaded.entries).toHaveLength(2);
+    expect(loaded.skippedLines).toBe(2);
+  });
+
   it.runIf(process.platform === "win32")(
     "treats drive letter case as the same workspace",
     () => {

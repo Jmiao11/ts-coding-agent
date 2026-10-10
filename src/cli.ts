@@ -460,6 +460,12 @@ function resumeSessionFile(
 ): { writer: SessionWriter; restored: RebuiltSession } {
   const loaded = loadSession(path);
 
+  if (loaded.skippedLines > 0) {
+    console.warn(
+      `⚠ 会话文件里有 ${loaded.skippedLines} 行无法解析，已跳过（通常是进程被强制结束时写到一半的记录）：${path}`,
+    );
+  }
+
   return {
     writer: createSessionWriter({
       path,

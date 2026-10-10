@@ -133,6 +133,8 @@ export type LoadedSession = {
   path: string;
   header: SessionHeader;
   entries: SessionEntry[];
+  /** 无法解析、被跳过的行数（通常是进程被强制结束时写到一半的记录） */
+  skippedLines: number;
 };
 
 
@@ -270,8 +272,9 @@ export function newSessionFile(
 function parseSessionText(
   path: string,
   text: string,
-): { header: SessionHeader; entries: SessionEntry[] } {
+): { header: SessionHeader; entries: SessionEntry[]; skippedLines: number } {
   const parsed: unknown[] = [];
+  let skippedLines = 0;
 
   for (const line of text.split("\n")) {
     if (line.trim().length === 0) {
@@ -281,7 +284,8 @@ function parseSessionText(
     try {
       parsed.push(JSON.parse(line));
     } catch {
-      // 写到一半的行（进程被强制结束）：跳过
+      // 跳过，但计数，恢复时告诉用户
+      skippedLines += 1;
     }
   }
 
@@ -292,7 +296,7 @@ function parseSessionText(
     throw new Error(`Not a session file: ${path}`);
   }
 
-  return { header, entries };
+  return { header, entries, skippedLines };
 }
 
 
@@ -300,7 +304,7 @@ export function loadSession(
   path: string,
 ): LoadedSession {
   const text = readFileSync(path, "utf8");
-  const { header, entries } = parseSessionText(path, text);
+  const { header, entries, skippedLines } = parseSessionText(path, text);
 
   // 最后一行没写完：补一个换行。
   // 否则下一条会接在半行后面，两行一起坏。
@@ -308,7 +312,7 @@ export function loadSession(
     appendFileSync(path, "\n");
   }
 
-  return { path, header, entries };
+  return { path, header, entries, skippedLines };
 }
 
 
