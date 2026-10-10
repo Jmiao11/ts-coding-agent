@@ -16,7 +16,7 @@ import {
 
 const DEFAULT_LINE_LIMIT = 500;
 const MAX_LINE_LIMIT = 2000;
-const MAX_OUTPUT_CHARS = 30_000;
+export const MAX_OUTPUT_CHARS = 30_000;
 
 
 const readFileParameters =
@@ -160,16 +160,21 @@ export function createReadFileTool(
       const partial =
         start > 0 || end < lines.length;
 
+      let body = selected.join("\n");
       let output: string;
 
-      if (!partial) {
-        // 整个文件：原样返回
+      // 整个文件且不超长：原样返回。
+      // 只有一行的文件（压缩后的代码、大 JSON）也会走到这里，所以必须同时看长度。
+      if (!partial && body.length <= MAX_OUTPUT_CHARS) {
         output = text;
       } else {
-        let body = selected.join("\n");
+        // 只有第一行能单独超过上限（后面的行超了会停在上一行），所以被截断的是第 start + 1 行
+        const cut =
+          body.length > MAX_OUTPUT_CHARS
+            ? `; line ${start + 1} was cut to ${MAX_OUTPUT_CHARS} of ${body.length} characters`
+            : "";
 
-        // 单行本身就超长（例如压缩后的代码）
-        if (body.length > MAX_OUTPUT_CHARS) {
+        if (cut) {
           body = `${body.slice(0, MAX_OUTPUT_CHARS)}…`;
         }
 
@@ -179,7 +184,7 @@ export function createReadFileTool(
             : "";
 
         output =
-          `${body}\n\n[showing lines ${start + 1}-${end} of ${lines.length}${more}]`;
+          `${body}\n\n[showing lines ${start + 1}-${end} of ${lines.length}${cut}${more}]`;
       }
 
       return {

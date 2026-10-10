@@ -21,6 +21,7 @@ import {
 
 import {
   createReadFileTool,
+  MAX_OUTPUT_CHARS,
 } from "../src/tools/read-file.js";
 
 import {
@@ -53,6 +54,28 @@ afterEach(async () => {
 
 
 describe("read_file", () => {
+  it("caps overlong lines and reports where they were cut", async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), "agent-harness-"));
+    await writeFile(join(tempDirectory, "min.js"), "a".repeat(100_000));
+    await writeFile(join(tempDirectory, "data.txt"), `short\n${"b".repeat(50_000)}\n`);
+
+    const tool = createReadFileTool(tempDirectory);
+    const single = await tool.execute("call-1", { path: "min.js" });
+    const singleText = single.content[0]?.text ?? "";
+    expect(singleText.length).toBeLessThan(MAX_OUTPUT_CHARS + 200);
+    expect(singleText).toContain(`line 1 was cut to ${MAX_OUTPUT_CHARS} of 100000 characters`);
+
+    const first = await tool.execute("call-2", { path: "data.txt" });
+    expect(first.content[0]?.text).toBe(
+      "short\n\n[showing lines 1-1 of 2; use offset=2 to read more]",
+    );
+
+    const next = await tool.execute("call-3", { path: "data.txt", offset: 2 });
+    const nextText = next.content[0]?.text ?? "";
+    expect(nextText.length).toBeLessThan(MAX_OUTPUT_CHARS + 200);
+    expect(nextText).toContain(`line 2 was cut to ${MAX_OUTPUT_CHARS} of 50000 characters`);
+  });
+
   it(
     "reads a UTF-8 file inside the workspace",
     async () => {
