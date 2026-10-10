@@ -1092,6 +1092,50 @@ describe("createOpenAICompatibleStreamFn", () => {
   ]);
 });
 
+  it("sends thinking blocks back as reasoning_content", () => {
+    const answered: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "想一想，" },
+        { type: "thinking", thinking: "答案是 2" },
+        { type: "text", text: "2" },
+      ],
+      provider: "openai-compatible",
+      model: "fake-model",
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    expect(toOpenAIMessage(answered)).toEqual({
+      role: "assistant",
+      content: "2",
+      reasoning_content: "想一想，答案是 2",
+    });
+
+    const calling: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "先读文件" },
+        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+      ],
+      provider: "openai-compatible",
+      model: "fake-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+
+    expect(toOpenAIMessage(calling)).toEqual({
+      role: "assistant",
+      content: null,
+      reasoning_content: "先读文件",
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+      }],
+    });
+  });
+
   it("converts assistant tool calls", () => {
   const message: AssistantMessage = {
     role: "assistant",

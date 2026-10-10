@@ -10,6 +10,7 @@ import type {
   Model,
   SimpleStreamOptions,
   TextContent,
+  ThinkingContent,
   Tool,
   ToolCall,
   Usage,
@@ -136,6 +137,12 @@ export type OpenAIChatMessage = {
    * 表示这个工具结果对应哪一个 tool call。
    */
   tool_call_id?: string;
+
+  /**
+   * 只有 assistant 消息有：推理模型的思考过程（DeepSeek）。
+   * 开启 thinking 且带工具时，之后每次请求都必须原样回传，否则 400。
+   */
+  reasoning_content?: string;
 };
 
 
@@ -283,30 +290,44 @@ export function toOpenAIMessage(
     case "assistant": {
       const text = messageText(message);
 
+      const reasoning = message.content
+        .filter(
+          (item): item is ThinkingContent =>
+            item.type === "thinking",
+        )
+        .map((item) => item.thinking)
+        .join("");
+
       const toolCalls = message.content.filter(
         (item): item is ToolCall =>
           item.type === "toolCall",
       );
 
-      if (toolCalls.length === 0) {
-        return {
-          role: "assistant",
-          content: text,
-        };
+      const result: OpenAIChatMessage =
+        toolCalls.length === 0
+          ? {
+              role: "assistant",
+              content: text,
+            }
+          : {
+              role: "assistant",
+              content: text.length > 0 ? text : null,
+              tool_calls: toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                type: "function" as const,
+                function: {
+                  name: toolCall.name,
+                  arguments: JSON.stringify(toolCall.arguments),
+                },
+              })),
+            };
+
+      // 只在真的有思考过程时才带上：其他 Provider 不认识这个字段
+      if (reasoning.length > 0) {
+        result.reasoning_content = reasoning;
       }
 
-      return {
-        role: "assistant",
-        content: text.length > 0 ? text : null,
-        tool_calls: toolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          type: "function" as const,
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
-      };
+      return result;
     }
 
 
