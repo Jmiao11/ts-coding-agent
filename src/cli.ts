@@ -39,6 +39,7 @@ import {
   applyUndo,
   createUndoNote,
   findConflicts,
+  findNewConflicts,
   planUndo,
   unannouncedUndos,
 } from "./checkpoint/undo.js";
@@ -1259,6 +1260,20 @@ const replCommands: ReplCommand[] = [
 
       if (answer?.trim().toLowerCase() !== "y") {
         console.log("已取消。");
+        return "continue";
+      }
+
+      // 用户看提示的这段时间里，文件可能又被改了：出现新冲突就停下，不覆盖
+      const changed = await findNewConflicts(workspaceRoot, plan, conflicts);
+
+      if (changed.length > 0) {
+        console.log("确认期间这些文件又被改过，为避免覆盖，这次没有撤销：");
+
+        for (const path of changed) {
+          console.log(`  ${path}`);
+        }
+
+        console.log("检查之后可以重新执行 /undo。");
         return "continue";
       }
 

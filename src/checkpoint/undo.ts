@@ -149,6 +149,21 @@ export async function findConflicts(
 }
 
 
+/**
+ * 确认之后、恢复之前再查一次：用户看 [y/N] 的时候文件可能又被改了。
+ * 只返回之前没有提示过的冲突；已经标过 ⚠ 的文件，用户已同意覆盖。
+ */
+export async function findNewConflicts(
+  workspaceRoot: string,
+  plan: UndoPlan,
+  shown: ReadonlySet<string>,
+): Promise<string[]> {
+  return (await findConflicts(workspaceRoot, plan)).filter(
+    (path) => !shown.has(path),
+  );
+}
+
+
 /** 恢复到任务开始前；返回恢复失败的文件 */
 export async function applyUndo(
   workspaceRoot: string,
