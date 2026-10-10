@@ -101,7 +101,7 @@ export function createReadFileTool(
         );
       }
 
-      assertNotSecretFile(relativePath);
+      assertNotSecretFile(relativePath, absolutePath);
 
       const buffer =
         await readFile(absolutePath);

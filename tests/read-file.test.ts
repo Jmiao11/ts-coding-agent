@@ -23,6 +23,14 @@ import {
   createReadFileTool,
 } from "../src/tools/read-file.js";
 
+import {
+  createSearchTextTool,
+} from "../src/tools/search-text.js";
+
+import {
+  createWriteFileTool,
+} from "../src/tools/write-file.js";
+
 
 let tempDirectory:
   string | undefined;
@@ -213,6 +221,77 @@ describe("read_file", () => {
       });
 
       expect(example.content[0]?.text).toBe("AGENT_API_KEY=");
+    },
+  );
+  it(
+    "blocks .env however the name is spelled (case, Windows trailing dots/spaces and stream names)",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      await writeFile(
+        join(tempDirectory, ".env"),
+        "AGENT_API_KEY=secret",
+        "utf8",
+      );
+
+      const read = createReadFileTool(tempDirectory);
+      const search = createSearchTextTool(tempDirectory);
+      const write = createWriteFileTool(tempDirectory);
+
+      // Windows、macOS 默认不区分大小写：.ENV 就是 .env
+      const spellings = [
+        ".ENV",
+        ".Env.Local",
+        ...(process.platform === "win32"
+          ? [".env.", ".env ", ".env::$DATA", ".ENV:$DATA"]
+          : []),
+      ];
+
+      for (const path of spellings) {
+        await expect(
+          read.execute("call-1", { path }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+
+        await expect(
+          search.execute("call-2", { pattern: "AGENT", path }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+
+        await expect(
+          write.execute("call-3", { path, content: "x" }),
+        ).rejects.toThrow(/may contain secrets|alternate data stream/);
+      }
+
+      // .env.example 仍然可读，不论大小写
+      await writeFile(
+        join(tempDirectory, ".env.example"),
+        "AGENT_API_KEY=",
+        "utf8",
+      );
+
+      await expect(
+        read.execute("call-4", { path: ".env.example" }),
+      ).resolves.toBeDefined();
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "refuses NTFS alternate data streams, which git diff does not show",
+    async () => {
+      tempDirectory =
+        await mkdtemp(
+          join(tmpdir(), "agent-harness-"),
+        );
+
+      await writeFile(join(tempDirectory, "notes.txt"), "hi", "utf8");
+
+      const write = createWriteFileTool(tempDirectory);
+
+      await expect(
+        write.execute("call-1", { path: "notes.txt:hidden", content: "payload" }),
+      ).rejects.toThrow("alternate data stream");
     },
   );
 });
