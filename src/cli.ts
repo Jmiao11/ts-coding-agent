@@ -723,7 +723,7 @@ const model = {
   maxTokens: 4096,
 };
 
-// 主任务和压缩总结用同一个 streamFn
+// 主任务用的 streamFn
 const streamFn = createOpenAICompatibleStreamFn({
   apiKey,
   baseUrl,
@@ -731,6 +731,17 @@ const streamFn = createOpenAICompatibleStreamFn({
     ? { extraBody: { thinking: { type: thinking } } }
     : {}),
 });
+
+// 压缩总结不开 thinking：总结是按模板整理已有内容，用不上推理，开了只会更慢、更贵；
+// 思考 token 还计入输出，可能挤占总结的输出上限，让总结更容易被截断。
+const summaryStreamFn =
+  thinking === "enabled"
+    ? createOpenAICompatibleStreamFn({
+        apiKey,
+        baseUrl,
+        extraBody: { thinking: { type: "disabled" } },
+      })
+    : streamFn;
 
 // ---------- 当前会话 ----------
 // 会话文件和压缩状态属于同一个会话：/new（以后还有 /resume）换会话时一起换。
@@ -751,7 +762,7 @@ function createActiveSession(
   // 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
   const compactor = createCompactor({
     model,
-    streamFn,
+    streamFn: summaryStreamFn,
     settings: compactionSettings,
 
     // 继续会话：从上次的压缩状态接着来
@@ -773,7 +784,10 @@ function createActiveSession(
           `summarized=${event.summarizedMessages}`,
           `kept=${event.keptMessages}`,
           ...(event.usage
-            ? [`summary in=${event.usage.input} out=${event.usage.output}`]
+            ? [
+                `summary in=${event.usage.input} out=${event.usage.output}`
+                + (event.usage.reasoning !== undefined ? ` reasoning=${event.usage.reasoning}` : ""),
+              ]
             : []),
           ...(event.attempts > 1
             ? [`attempts=${event.attempts}（首次被截断，in/out 含两次）`]
