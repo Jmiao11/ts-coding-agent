@@ -82,7 +82,13 @@ import {
 
 import {
   createCodingSystemPrompt,
+  createSubagentSystemPrompt,
 } from "./prompts/coding-system-prompt.js";
+
+import {
+  createTaskTool,
+  type TaskDetails,
+} from "./tools/task.js";
 
 import {
   sanitizeForLlm,
@@ -640,6 +646,9 @@ type UsageStats = {
   compactions: number;
   compactionInput: number;
   compactionOutput: number;
+  subtasks: number;
+  subtaskInput: number;
+  subtaskOutput: number;
 };
 
 
@@ -654,6 +663,9 @@ function emptyStats(): UsageStats {
     compactions: 0,
     compactionInput: 0,
     compactionOutput: 0,
+    subtasks: 0,
+    subtaskInput: 0,
+    subtaskOutput: 0,
   };
 }
 
@@ -671,6 +683,9 @@ function addStats(
   into.compactions += from.compactions;
   into.compactionInput += from.compactionInput;
   into.compactionOutput += from.compactionOutput;
+  into.subtasks += from.subtasks;
+  into.subtaskInput += from.subtaskInput;
+  into.subtaskOutput += from.subtaskOutput;
 }
 
 
@@ -694,11 +709,29 @@ function printTokens(
       output: stats.compactionOutput,
     });
   }
+  if (stats.subtasks > 0) {
+    console.log(`Token 用量（子任务${scope}）：`, {
+      calls: stats.subtasks,
+      input: stats.subtaskInput,
+      output: stats.subtaskOutput,
+    });
+  }
 
-  if (stats.input > 0 || stats.compactions > 0) {
+  if (
+    stats.input > 0
+    || stats.compactions > 0
+    || stats.subtasks > 0
+  ) {
     console.log(`Token 合计${scope}：`, {
-      input: stats.input + stats.compactionInput,
-      output: stats.output + stats.compactionOutput,
+      input:
+        stats.input
+        + stats.compactionInput
+        + stats.subtaskInput,
+
+      output:
+        stats.output
+        + stats.compactionOutput
+        + stats.subtaskOutput,
     });
   }
 }
@@ -865,6 +898,32 @@ const budget = createBudgetExtension({
   maxToolCalls: 120,
 });
 
+// 子 Agent 只获得只读工具，预算按子任务独立创建。
+const taskTool = createTaskTool({
+  model,
+  streamFn,
+
+  systemPrompt:
+    createSubagentSystemPrompt(workspaceRoot),
+
+  tools: [
+    createListDirectoryTool(workspaceRoot),
+    createReadFileTool(workspaceRoot),
+    createSearchTextTool(workspaceRoot),
+  ],
+
+  createExtensions: () => [
+    createBudgetExtension({
+      maxModelCalls: 20,
+      maxToolCalls: 60,
+    }),
+
+    createLoggerExtension(
+      (line) => console.log(`  [task] ${line}`),
+    ),
+  ],
+});
+
 const agent = new Agent({
   initialState: {
     model,
@@ -882,6 +941,7 @@ const agent = new Agent({
       createWriteFileTool(workspaceRoot, { track: trackWrite }),
       createEditFileTool(workspaceRoot, { track: trackWrite }),
       createRunCommandTool(workspaceRoot),
+      taskTool,
     ],
   },
 
@@ -917,6 +977,25 @@ agent.subscribe((event) => {
 
   if (event.type === "tool_execution_start") {
     current.tools.push(event.toolName);
+  }
+  
+    // 子 Agent 的消息不经过主 Agent 的订阅回调。
+  if (
+    event.type === "tool_execution_end"
+    && event.toolName === "task"
+  ) {
+    const details =
+      (event.result as { details?: TaskDetails }).details;
+
+    if (details) {
+      current.subtasks += 1;
+      current.subtaskInput += details.usage.input;
+      current.subtaskOutput += details.usage.output;
+
+      console.log(
+        `  [task] ${event.isError ? "failed" : "done"}: ${details.description}（模型 ${details.modelCalls} 次，工具 ${details.toolCalls} 次，in=${details.usage.input} out=${details.usage.output}）`,
+      );
+    }
   }
 
   if (
@@ -1254,7 +1333,7 @@ const replCommands: ReplCommand[] = [
         `上下文：估算约 ${context.estimatedTokens} tokens，压缩阈值 ${context.threshold}（${percent}%）`,
       );
       console.log(
-        `本次运行：${taskCount} 个任务，input ${total.input + total.compactionInput}，output ${total.output + total.compactionOutput}`,
+        `本次运行：${taskCount} 个任务，input ${total.input + total.compactionInput + total.subtaskInput}，output ${total.output + total.compactionOutput + total.subtaskOutput}`,
       );
 
       return "continue";
