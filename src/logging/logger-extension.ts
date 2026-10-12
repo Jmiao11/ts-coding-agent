@@ -61,6 +61,9 @@ export function createLoggerExtension(
                   ? [`cached=${usage.cacheRead}`]
                   : []),
                 `out=${usage.output}`,
+                ...(usage.reasoning !== undefined
+                  ? [`reasoning=${usage.reasoning}`]
+                  : []),
               ]
             : []),
         ].join(" "),

@@ -10,6 +10,7 @@ import type {
   Model,
   SimpleStreamOptions,
   TextContent,
+  ThinkingContent,
   Tool,
   ToolCall,
   Usage,
@@ -136,6 +137,12 @@ export type OpenAIChatMessage = {
    * 表示这个工具结果对应哪一个 tool call。
    */
   tool_call_id?: string;
+
+  /**
+   * 只有 assistant 消息有：推理模型的思考过程（DeepSeek）。
+   * 开启 thinking 且带工具时，之后每次请求都必须原样回传，否则 400。
+   */
+  reasoning_content?: string;
 };
 
 
@@ -283,30 +290,44 @@ export function toOpenAIMessage(
     case "assistant": {
       const text = messageText(message);
 
+      const reasoning = message.content
+        .filter(
+          (item): item is ThinkingContent =>
+            item.type === "thinking",
+        )
+        .map((item) => item.thinking)
+        .join("");
+
       const toolCalls = message.content.filter(
         (item): item is ToolCall =>
           item.type === "toolCall",
       );
 
-      if (toolCalls.length === 0) {
-        return {
-          role: "assistant",
-          content: text,
-        };
+      const result: OpenAIChatMessage =
+        toolCalls.length === 0
+          ? {
+              role: "assistant",
+              content: text,
+            }
+          : {
+              role: "assistant",
+              content: text.length > 0 ? text : null,
+              tool_calls: toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                type: "function" as const,
+                function: {
+                  name: toolCall.name,
+                  arguments: JSON.stringify(toolCall.arguments),
+                },
+              })),
+            };
+
+      // 只在真的有思考过程时才带上：其他 Provider 不认识这个字段
+      if (reasoning.length > 0) {
+        result.reasoning_content = reasoning;
       }
 
-      return {
-        role: "assistant",
-        content: text.length > 0 ? text : null,
-        tool_calls: toolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          type: "function" as const,
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
-      };
+      return result;
     }
 
 
@@ -399,6 +420,10 @@ export function createOpenAICompatibleStreamFn(
        * "你好"
        */
       let fullText = "";
+
+      /** 到目前为止的完整思考过程 */
+      let fullReasoning = "";
+
       let usage: Usage | undefined;
       let finishReason: string | undefined;
 
@@ -548,6 +573,12 @@ export function createOpenAICompatibleStreamFn(
             finishReason = chunkFinish;
           }
 
+          const reasoningDelta = extractReasoningDelta(data);
+
+          if (reasoningDelta) {
+            fullReasoning += reasoningDelta;
+          }
+
 
           /**
            * 第三层：
@@ -652,6 +683,8 @@ export function createOpenAICompatibleStreamFn(
                 message.usage = usage;
               }
 
+              addThinking(message, fullReasoning);
+
 
               stream.push({
                 type: "done",
@@ -695,6 +728,8 @@ export function createOpenAICompatibleStreamFn(
         if (usage) {
           message.usage = usage;
         }
+
+        addThinking(message, fullReasoning);
 
         stream.push({
           type: "done",
@@ -1314,7 +1349,41 @@ type OpenAIUsage = {
 
   // DeepSeek 的写法
   prompt_cache_hit_tokens?: number;
+
+  // 思考 token：已经包含在 completion_tokens 里
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  };
 };
+
+
+/**
+ * 取出 chunk 里的思考过程增量（DeepSeek：delta.reasoning_content）。
+ * 和 extractOpenAIUsage 一样单独提取，不改 parseOpenAIStreamData：
+ * 同一个 chunk 里可能既有 reasoning_content 又有 content，不能只返回一种。
+ */
+export function extractReasoningDelta(
+  data: string,
+): string | undefined {
+  if (data === "[DONE]") {
+    return undefined;
+  }
+
+  try {
+    const chunk = JSON.parse(data) as {
+      choices?: Array<{ delta?: { reasoning_content?: string | null } }>;
+    };
+
+    const reasoning = chunk.choices?.[0]?.delta?.reasoning_content;
+
+    // 第一个 chunk 是空字符串，跳过
+    return typeof reasoning === "string" && reasoning.length > 0
+      ? reasoning
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 
 /**
@@ -1387,6 +1456,13 @@ export function extractOpenAIUsage(
     usage.cacheRead = cached;
   }
 
+  const reasoning =
+    raw.completion_tokens_details?.reasoning_tokens;
+
+  if (typeof reasoning === "number") {
+    usage.reasoning = reasoning;
+  }
+
   return usage;
 }
 
@@ -1439,6 +1515,20 @@ function finalizeToolCalls(
     });
 }
 
+
+
+/** 有思考过程就放在内容最前面：回传时按原样还原成 reasoning_content */
+function addThinking(
+  message: AssistantMessage,
+  reasoning: string,
+): void {
+  if (reasoning.length > 0) {
+    message.content.unshift({
+      type: "thinking",
+      thinking: reasoning,
+    });
+  }
+}
 
 
 // Provider 收到模型 SSE

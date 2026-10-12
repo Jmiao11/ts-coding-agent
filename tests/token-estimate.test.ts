@@ -11,6 +11,7 @@ import type {
 
 import {
   estimateContextTokens,
+  estimateMessageTokens,
   estimateTextTokens,
 } from "../src/context/token-estimate.js";
 
@@ -74,4 +75,24 @@ describe("estimateContextTokens", () => {
       estimateContextTokens(messages, 3).usageTokens,
     ).toBe(0);
   });
+
+  describe("estimateMessageTokens", () => {
+  it("counts thinking blocks, which are sent back to the model", () => {
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "x".repeat(300) },
+        { type: "text", text: "ok" },
+      ],
+      provider: "fake",
+      model: "fake",
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    // 300 个 ASCII 按 /3 是 100，"ok" 是 1
+    expect(estimateMessageTokens(message)).toBe(101);
+  });
+
+});
 });

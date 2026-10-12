@@ -151,7 +151,7 @@ const HELP = `用法：
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
-  可选：AGENT_THINKING=disabled（DeepSeek：显式关闭 thinking）
+  可选：AGENT_THINKING=enabled 或 disabled（DeepSeek：显式开启或关闭 thinking）
 
 交互模式：/exit、Ctrl+C 或 Ctrl+D 退出；任务运行中按 Ctrl+C 只中止当前任务。
 任何时候连按两次 Ctrl+C 都会强制退出。`;
@@ -253,13 +253,17 @@ const apiKey = requiredEnv("AGENT_API_KEY");
 const baseUrl = requiredEnv("AGENT_BASE_URL");
 const modelId = values.model ?? requiredEnv("AGENT_MODEL");
 
-// DeepSeek 默认开启 thinking；开启时带 tools 的请求必须回传每轮的 reasoning_content，
-// 我们还不支持，所以目前只允许显式关闭。不设置就什么都不发（其他 Provider 可能不认识这个字段）。
+// DeepSeek 的 thinking 开关。开启时思考过程存进消息的 thinking 块，之后每次请求原样回传。
+// 不设置就什么都不发，用 Provider 的默认值（其他 Provider 可能不认识这个字段）。
 const thinking = process.env.AGENT_THINKING || undefined;
 
-if (thinking !== undefined && thinking !== "disabled") {
+if (
+  thinking !== undefined
+  && thinking !== "enabled"
+  && thinking !== "disabled"
+) {
   fail(
-    `AGENT_THINKING 目前只支持 disabled（收到：${thinking}）。开启 thinking 需要先支持回传 reasoning_content。`,
+    `AGENT_THINKING 只能是 enabled 或 disabled（收到：${thinking}）。`,
   );
 }
 
@@ -719,14 +723,25 @@ const model = {
   maxTokens: 4096,
 };
 
-// 主任务和压缩总结用同一个 streamFn
+// 主任务用的 streamFn
 const streamFn = createOpenAICompatibleStreamFn({
   apiKey,
   baseUrl,
-  ...(thinking === "disabled"
-    ? { extraBody: { thinking: { type: "disabled" } } }
+  ...(thinking !== undefined
+    ? { extraBody: { thinking: { type: thinking } } }
     : {}),
 });
+
+// 压缩总结不开 thinking：总结是按模板整理已有内容，用不上推理，开了只会更慢、更贵；
+// 思考 token 还计入输出，可能挤占总结的输出上限，让总结更容易被截断。
+const summaryStreamFn =
+  thinking === "enabled"
+    ? createOpenAICompatibleStreamFn({
+        apiKey,
+        baseUrl,
+        extraBody: { thinking: { type: "disabled" } },
+      })
+    : streamFn;
 
 // ---------- 当前会话 ----------
 // 会话文件和压缩状态属于同一个会话：/new（以后还有 /resume）换会话时一起换。
@@ -747,7 +762,7 @@ function createActiveSession(
   // 总结调用不经过 Agent Loop；Budget 不计算总结调用，token 单独统计。
   const compactor = createCompactor({
     model,
-    streamFn,
+    streamFn: summaryStreamFn,
     settings: compactionSettings,
 
     // 继续会话：从上次的压缩状态接着来
@@ -769,7 +784,10 @@ function createActiveSession(
           `summarized=${event.summarizedMessages}`,
           `kept=${event.keptMessages}`,
           ...(event.usage
-            ? [`summary in=${event.usage.input} out=${event.usage.output}`]
+            ? [
+                `summary in=${event.usage.input} out=${event.usage.output}`
+                + (event.usage.reasoning !== undefined ? ` reasoning=${event.usage.reasoning}` : ""),
+              ]
             : []),
           ...(event.attempts > 1
             ? [`attempts=${event.attempts}（首次被截断，in/out 含两次）`]
@@ -938,6 +956,17 @@ agent.subscribe((event) => {
       current.cached += usage.cacheRead ?? 0;
       current.output += usage.output;
       current.peakInput = Math.max(current.peakInput, usage.input);
+    }
+
+    // 思考过程可能很长，只打印长度
+    const thinkingChars = event.message.content.reduce(
+      (sum, item) =>
+        item.type === "thinking" ? sum + item.thinking.length : sum,
+      0,
+    );
+
+    if (thinkingChars > 0) {
+      console.log(`[thinking] ${thinkingChars} 字符`);
     }
 
     const text = event.message.content

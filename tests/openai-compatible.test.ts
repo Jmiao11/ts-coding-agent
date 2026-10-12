@@ -528,6 +528,76 @@ describe("createOpenAICompatibleStreamFn", () => {
       .rejects.toThrow(errorMessage);
   });
 
+  it("collects streamed reasoning_content into a thinking block before the text and tool calls", async () => {
+    const encoder = new TextEncoder();
+
+    // 按第 0 步实测的 DeepSeek 格式：第一个 chunk 是 reasoning_content: ""、content: null
+    function sse(chunks: unknown[]): Response {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+
+      return new Response(body, { status: 200 });
+    }
+
+    function delta(value: Record<string, unknown>, finish: string | null = null) {
+      return { choices: [{ index: 0, delta: value, finish_reason: finish }] };
+    }
+
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(sse([
+        delta({ role: "assistant", content: null, reasoning_content: "" }),
+        delta({ content: null, reasoning_content: "想一想" }),
+        delta({ content: null, reasoning_content: "，答案是 2" }),
+        delta({ content: "2" }, "stop"),
+      ]))
+      .mockResolvedValueOnce(sse([
+        delta({ content: null, reasoning_content: "先读文件" }),
+        delta({
+          tool_calls: [{
+            index: 0,
+            id: "call-1",
+            type: "function",
+            function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+          }],
+        }, "tool_calls"),
+      ]));
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    async function finalMessage(): Promise<AssistantMessage | undefined> {
+      let done: AssistantMessage | undefined;
+
+      for await (const event of await streamFn(model, context, undefined)) {
+        if (event.type === "done") {
+          done = event.message;
+        }
+      }
+
+      return done;
+    }
+
+    expect((await finalMessage())?.content).toEqual([
+      { type: "thinking", thinking: "想一想，答案是 2" },
+      { type: "text", text: "2" },
+    ]);
+
+    expect((await finalMessage())?.content).toEqual([
+      { type: "thinking", thinking: "先读文件" },
+      { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+    ]);
+  });
+
   it("merges extraBody into the request without overriding standard fields", async () => {
     const encoder = new TextEncoder();
 
@@ -1022,6 +1092,50 @@ describe("createOpenAICompatibleStreamFn", () => {
   ]);
 });
 
+  it("sends thinking blocks back as reasoning_content", () => {
+    const answered: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "想一想，" },
+        { type: "thinking", thinking: "答案是 2" },
+        { type: "text", text: "2" },
+      ],
+      provider: "openai-compatible",
+      model: "fake-model",
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    expect(toOpenAIMessage(answered)).toEqual({
+      role: "assistant",
+      content: "2",
+      reasoning_content: "想一想，答案是 2",
+    });
+
+    const calling: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "先读文件" },
+        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+      ],
+      provider: "openai-compatible",
+      model: "fake-model",
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+
+    expect(toOpenAIMessage(calling)).toEqual({
+      role: "assistant",
+      content: null,
+      reasoning_content: "先读文件",
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+      }],
+    });
+  });
+
   it("converts assistant tool calls", () => {
   const message: AssistantMessage = {
     role: "assistant",
@@ -1056,6 +1170,49 @@ describe("createOpenAICompatibleStreamFn", () => {
     ],
   });
 });
+
+  it("reads reasoning tokens from usage", async () => {
+    const encoder = new TextEncoder();
+
+    // 第 0 步实测的 DeepSeek usage：completion_tokens 包含 reasoning_tokens
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const data of [
+          '{"choices":[{"delta":{"content":"2"},"finish_reason":"stop"}]}',
+          '{"choices":[],"usage":{"prompt_tokens":41,"completion_tokens":45,"completion_tokens_details":{"reasoning_tokens":36},"prompt_cache_hit_tokens":0}}',
+          "[DONE]",
+        ]) {
+          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        }
+
+        controller.close();
+      },
+    });
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, { status: 200 }),
+    );
+
+    const streamFn = createOpenAICompatibleStreamFn({
+      apiKey: "test-key",
+      baseUrl: "https://example.com/v1",
+    });
+
+    let done: AssistantMessage | undefined;
+
+    for await (const event of await streamFn(model, context, undefined)) {
+      if (event.type === "done") {
+        done = event.message;
+      }
+    }
+
+    expect(done?.usage).toEqual({
+      input: 41,
+      output: 45,
+      cacheRead: 0,
+      reasoning: 36,
+    });
+  });
 
   it("reads token usage from the final usage chunk", async () => {
     const encoder = new TextEncoder();

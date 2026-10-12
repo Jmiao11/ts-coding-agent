@@ -53,17 +53,23 @@ export function estimateMessageTokens(
       return estimateTextTokens(textOf(message.content));
       // 这三个角色使用相同的处理逻辑，所以共用一个 return。
 
-    // 它不仅能够包含普通文本，还能包含 ToolCall（工具调用）。
+    // 可能包含文本、思考过程和 ToolCall；思考过程也会回传给模型，同样要算。
     case "assistant":
       return message.content.reduce(
-        (sum, item) =>
-          sum + (
-            item.type === "text"
-              ? estimateTextTokens(item.text)
-              : estimateTextTokens(
+        (sum, item) => {
+          switch (item.type) {
+            case "text":
+              return sum + estimateTextTokens(item.text);
+
+            case "thinking":
+              return sum + estimateTextTokens(item.thinking);
+
+            case "toolCall":
+              return sum + estimateTextTokens(
                 item.name + JSON.stringify(item.arguments),
-              )
-          ),
+              );
+          }
+        },
         0,
       );
   }

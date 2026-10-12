@@ -14,6 +14,16 @@ export type ToolCall = {
 };
 
 
+/**
+ * 推理模型的思考过程（DeepSeek 的 reasoning_content）。
+ * 开启 thinking 且带工具时，之后的每次请求都必须原样回传，否则 400。
+ */
+export type ThinkingContent = {
+  type: "thinking";
+  thinking: string;
+};
+
+
 export type SystemMessage = {
   role: "system";
   content: string;
@@ -36,12 +46,15 @@ export type Usage = {
 
   /** 输入中命中 Provider 前缀缓存的部分（Provider 返回了才有） */
   cacheRead?: number;
+
+  /** output 里属于思考过程的部分（开启 thinking 且 Provider 返回了才有） */
+  reasoning?: number;
 };
 
 
 export type AssistantMessage = {
   role: "assistant";
-  content: Array<TextContent | ToolCall>;
+  content: Array<ThinkingContent | TextContent | ToolCall>;
 
   provider: string;
   model: string;
