@@ -82,7 +82,7 @@ export function createTaskTool(
     label: "Task",
 
     description:
-      "Delegate a self-contained research task to a sub-agent that starts with a fresh, empty context. The sub-agent can only use read-only tools; it cannot edit files or run commands. Use it for exploration that would otherwise fill your context with file contents, for example \"find where X is implemented and summarize how it works\". Its final report is returned to you; the files it read are not.",
+      "Delegate a self-contained research task to a sub-agent that starts with a fresh, empty context. The sub-agent can only use read-only tools; it cannot edit files or run commands. Use it for exploration that would otherwise fill your context with file contents, for example \"find where X is implemented and summarize how it works\". Its final report is returned to you; the files it read are not. Prefer it over reading many files yourself, because everything you read stays in your context for the rest of the session.",
 
     parameters:
       taskParameters,

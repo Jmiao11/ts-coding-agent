@@ -38,7 +38,7 @@ export function createCodingSystemPrompt(
 
     // 观察：读了与任务无关的文件
     "- Be efficient: skip files that are irrelevant to the task. Call independent tools in the same turn.",
-    "- For broad exploration that would mean reading many files (for example, how a feature works across several modules), delegate it with the task tool and give it complete, self-contained instructions. When you already know which one or two files matter, read them yourself.",
+    "- Use the task tool when answering would require reading more than three or four files, for example understanding how a feature works across modules or finding every place something is used. Give it complete, self-contained instructions and say what it should report. This keeps your own context small. Read files yourself only when you already know the one or two files that matter.",
 
     // 观察：叙述用英文，结论用中文
     "- Always reply in the same language the user used, including the short notes you write between tool calls.",
