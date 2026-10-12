@@ -333,4 +333,54 @@ describe("task tool", () => {
       usage: { input: 100, output: 10 },
     });
   });
+
+  it("stops the sub-agent when the run is aborted while one of its tools is running", async () => {
+    const controller = new AbortController();
+
+    // 第二条回复用于发现中止信号没有传入子循环的情况。
+    const { streamFn, requests } = scriptedStreamFn([
+      assistant(
+        [
+          { type: "toolCall", id: "sub-1", name: "slow", arguments: {} },
+          { type: "toolCall", id: "sub-2", name: "slow", arguments: {} },
+        ],
+        "toolUse",
+        { input: 100, output: 10 },
+      ),
+      assistant(
+        [{ type: "text", text: "不应该走到这里" }],
+        "stop",
+        { input: 200, output: 20 },
+      ),
+    ]);
+
+    let executed = 0;
+    const parameters = Type.Object({});
+    const slow: AgentTool<typeof parameters, Record<string, never>> = {
+      name: "slow",
+      label: "Slow",
+      description: "Pretends to take a while; the user presses Ctrl+C meanwhile.",
+      parameters,
+      async execute() {
+        executed += 1;
+        controller.abort();
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+    };
+
+    const result = await createTaskTool({
+      model,
+      streamFn,
+      systemPrompt: "You are a sub-agent.",
+      tools: [slow],
+    }).execute("call-1", { description: "x", prompt: "y" }, controller.signal);
+
+    expect(executed).toBe(1);
+    expect(requests).toHaveLength(1);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toBe(
+      "Task not completed: the user interrupted the run before the sub-agent finished.",
+    );
+  });
 });
