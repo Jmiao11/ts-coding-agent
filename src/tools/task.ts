@@ -21,6 +21,10 @@ import type {
 } from "../ai/types.js";
 
 import {
+  BudgetExceededError,
+} from "../extensions/budget.js";
+
+import {
   sanitizeForLlm,
 } from "../session/sanitize-for-llm.js";
 
@@ -94,24 +98,35 @@ export function createTaskTool(
         timestamp: Date.now(),
       };
 
-      const messages = await runAgentLoop(
-        [prompt],
-        {
-          systemPrompt: options.systemPrompt,
-          messages: [],
-          tools: options.tools,
-        },
-        {
-          model: options.model,
-          convertToLlm: sanitizeForLlm,
-          extensions: options.createExtensions?.() ?? [],
-        },
-        signal,
-        options.streamFn,
-        () => {},
-      );
+      // 循环中途抛错时，也保留已经产生的完整消息。
+      const messages: AgentMessage[] = [];
+      let thrown: unknown;
 
-      // 类型谓词，它告诉 TypeScript：如果这个判断返回 true，那么 message 就是 AssistantMessage 类型。
+      try {
+        await runAgentLoop(
+          [prompt],
+          {
+            systemPrompt: options.systemPrompt,
+            messages: [],
+            tools: options.tools,
+          },
+          {
+            model: options.model,
+            convertToLlm: sanitizeForLlm,
+            extensions: options.createExtensions?.() ?? [],
+          },
+          signal,
+          options.streamFn,
+          (event) => {
+            if (event.type === "message_end") {
+              messages.push(event.message);
+            }
+          },
+        );
+      } catch (error) {
+        thrown = error ?? new Error("unknown error");
+      }
+
       const replies = messages.filter(
         (message): message is AssistantMessage =>
           message.role === "assistant",
@@ -141,14 +156,35 @@ export function createTaskTool(
         },
       };
 
-      const report = replies
-        .at(-1)
+      const last = replies.at(-1);
+
+      const report = last
         ?.content.filter(
           (item): item is TextContent =>
             item.type === "text",
         )
         .map((item) => item.text)
         .join("") ?? "";
+
+      const failure = describeFailure(
+        thrown,
+        last,
+        report,
+        signal,
+      );
+
+      if (failure !== undefined) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task not completed: ${failure}`,
+            },
+          ],
+          details,
+          isError: true,
+        };
+      }
 
       return {
         content: [
@@ -161,4 +197,43 @@ export function createTaskTool(
       };
     },
   };
+}
+
+/** 正常完成返回 undefined，否则返回给主 Agent 的失败说明。 */
+function describeFailure(
+  thrown: unknown,
+  last: AssistantMessage | undefined,
+  report: string,
+  signal: AbortSignal | undefined,
+): string | undefined {
+  if (
+    signal?.aborted
+    || last?.stopReason === "aborted"
+  ) {
+    return "the user interrupted the run before the sub-agent finished.";
+  }
+
+  if (thrown instanceof BudgetExceededError) {
+    return `the sub-agent used up its own budget (${thrown.message}). This was the sub-agent's budget, not yours; you can continue, for example with a narrower task.`;
+  }
+
+  if (thrown !== undefined) {
+    return `the sub-agent stopped with an error: ${
+      thrown instanceof Error
+        ? thrown.message
+        : String(thrown)
+    }`;
+  }
+
+  if (last?.stopReason === "error") {
+    return `the sub-agent's model call failed: ${
+      last.errorMessage ?? "unknown error"
+    }`;
+  }
+
+  if (report.trim().length === 0) {
+    return "the sub-agent finished without writing a report.";
+  }
+
+  return undefined;
 }

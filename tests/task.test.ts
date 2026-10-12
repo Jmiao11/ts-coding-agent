@@ -22,6 +22,10 @@ import type {
 } from "../src/agent/types.js";
 
 import {
+  createBudgetExtension,
+} from "../src/extensions/budget.js";
+
+import {
   createTaskTool,
 } from "../src/tools/task.js";
 
@@ -72,14 +76,25 @@ function scriptedStreamFn(replies: AssistantMessage[]) {
 
     stream.push({ type: "start", partial: message });
 
-    stream.push({
-      type: "done",
-      reason:
-        message.stopReason === "toolUse"
-          ? "toolUse"
-          : "stop",
-      message,
-    });
+    if (
+      message.stopReason === "error"
+      || message.stopReason === "aborted"
+    ) {
+      stream.push({
+        type: "error",
+        reason: message.stopReason,
+        error: message,
+      });
+    } else {
+      stream.push({
+        type: "done",
+        reason:
+          message.stopReason === "toolUse"
+            ? "toolUse"
+            : "stop",
+        message,
+      });
+    }
 
     stream.end();
 
@@ -184,5 +199,138 @@ describe("task tool", () => {
         (tool) => tool.name,
       ),
     ).toEqual(["read_file"]);
+  });
+
+
+  it("reports a failed or empty sub-agent run as an error, not as an empty success", async () => {
+    const failing = scriptedStreamFn([
+      {
+        ...assistant([], "error", { input: 0, output: 0 }),
+        errorMessage: "Provider HTTP 502: bad gateway",
+      },
+    ]);
+
+    const broken = await createTaskTool({
+      model,
+      streamFn: failing.streamFn,
+      systemPrompt: "You are a sub-agent.",
+      tools: [],
+    }).execute("call-1", {
+      description: "x",
+      prompt: "y",
+    });
+
+    expect(broken.isError).toBe(true);
+
+    expect(broken.content[0]?.text).toBe(
+      "Task not completed: the sub-agent's model call failed: Provider HTTP 502: bad gateway",
+    );
+
+    const silent = scriptedStreamFn([
+      assistant([], "stop", { input: 10, output: 0 }),
+    ]);
+
+    const empty = await createTaskTool({
+      model,
+      streamFn: silent.streamFn,
+      systemPrompt: "You are a sub-agent.",
+      tools: [],
+    }).execute("call-2", {
+      description: "x",
+      prompt: "y",
+    });
+
+    expect(empty.isError).toBe(true);
+
+    expect(empty.content[0]?.text).toBe(
+      "Task not completed: the sub-agent finished without writing a report.",
+    );
+  });
+
+
+  it("says the run was interrupted when the sub-agent is aborted", async () => {
+    const { streamFn } = scriptedStreamFn([
+      assistant([], "aborted", { input: 0, output: 0 }),
+    ]);
+
+    const result = await createTaskTool({
+      model,
+      streamFn,
+      systemPrompt: "You are a sub-agent.",
+      tools: [],
+    }).execute("call-1", {
+      description: "x",
+      prompt: "y",
+    });
+
+    expect(result.isError).toBe(true);
+
+    expect(result.content[0]?.text).toBe(
+      "Task not completed: the user interrupted the run before the sub-agent finished.",
+    );
+  });
+
+
+  it("turns the sub-agent's own budget running out into an error result with what it did so far", async () => {
+    const { streamFn } = scriptedStreamFn([
+      assistant(
+        [{
+          type: "toolCall",
+          id: "sub-1",
+          name: "noop",
+          arguments: {},
+        }],
+        "toolUse",
+        { input: 100, output: 10 },
+      ),
+    ]);
+
+    const parameters = Type.Object({});
+
+    const noop: AgentTool<
+      typeof parameters,
+      Record<string, never>
+    > = {
+      name: "noop",
+      label: "Noop",
+      description: "Does nothing.",
+      parameters,
+
+      async execute() {
+        return {
+          content: [{ type: "text", text: "ok" }],
+          details: {},
+        };
+      },
+    };
+
+    const task = createTaskTool({
+      model,
+      streamFn,
+      systemPrompt: "You are a sub-agent.",
+      tools: [noop],
+
+      createExtensions: () => [
+        createBudgetExtension({ maxModelCalls: 1 }),
+      ],
+    });
+
+    const result = await task.execute("call-1", {
+      description: "x",
+      prompt: "y",
+    });
+
+    expect(result.isError).toBe(true);
+
+    expect(result.content[0]?.text).toBe(
+      "Task not completed: the sub-agent used up its own budget (Budget exceeded: model_calls limit is 1.). This was the sub-agent's budget, not yours; you can continue, for example with a narrower task.",
+    );
+
+    expect(result.details).toEqual({
+      description: "x",
+      modelCalls: 1,
+      toolCalls: 1,
+      usage: { input: 100, output: 10 },
+    });
   });
 });
