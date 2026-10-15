@@ -1,13 +1,30 @@
 import {
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+
+import {
+  tmpdir,
+} from "node:os";
+
+import {
+  join,
+} from "node:path";
+
+import {
+  afterEach,
   describe,
   expect,
   it,
 } from "vitest";
 
-import type {
-  CommandExecutor,
-  CommandRequest,
-  CommandRunResult,
+import {
+  codexSandboxArgs,
+  createCodexSandboxExecutor,
+  type CommandExecutor,
+  type CommandRequest,
+  type CommandRunResult,
 } from "../src/tools/command-executor.js";
 
 import {
@@ -102,4 +119,78 @@ describe("run_command with an injected executor", () => {
     expect(dropped.content[0]?.text).not.toContain("half line");
     expect(dropped.content[0]?.text).toContain("last line\nExit code: 1");
   });
+
+
+
+describe("codex sandbox executor", () => {
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    delete process.env.AGENT_PROBE_SECRET;
+
+    if (directory) {
+      await rm(directory, { recursive: true, force: true });
+      directory = undefined;
+    }
+  });
+
+  it("builds the codex arguments: mode, our env policy, cleared variables, and the command passed by env var", () => {
+    expect(
+      codexSandboxArgs({ mode: "elevated", clearEnv: ["ANTHROPIC_AUTH_TOKEN"] }),
+    ).toEqual([
+      "-c", "windows.sandbox=elevated",
+      "-c", "shell_environment_policy.inherit=all",
+      "-c", 'shell_environment_policy.set.ANTHROPIC_AUTH_TOKEN=""',
+      "sandbox", "--permission-profile", ":workspace", "--",
+      // 命令本身不进参数：Codex 会把参数里的引号转义成 \"，cmd 不认识
+      "cmd.exe", "/d", "/s", "/c", "%TSA_SANDBOX_COMMAND%",
+    ]);
+  });
+
+  it("runs codex with those arguments, hands the command over in TSA_SANDBOX_COMMAND and keeps AGENT_* out", async () => {
+    directory = await mkdtemp(join(tmpdir(), "agent-harness-"));
+
+    // 假的 codex：打印收到的参数和环境，按命令决定退出码
+    const fakeCodex = join(directory, "fake-codex.mjs");
+    await writeFile(
+      fakeCodex,
+      [
+        "const command = process.env.TSA_SANDBOX_COMMAND;",
+        "console.log(JSON.stringify({ argv: process.argv.slice(2), command, secret: process.env.AGENT_PROBE_SECRET ?? null }));",
+        'process.exit(command === "fail" ? 3 : 0);',
+      ].join("\n"),
+      "utf8",
+    );
+
+    process.env.AGENT_PROBE_SECRET = "should-not-leak";
+
+    const executor = createCodexSandboxExecutor({
+      codexExe: process.execPath,
+      prefixArgs: [fakeCodex],
+      mode: "elevated",
+    });
+
+    const ok = await executor.run({
+      command: 'node -e "console.log(1)"',
+      cwd: directory,
+      timeoutMs: 10_000,
+    });
+
+    expect(ok.exitCode).toBe(0);
+    expect(JSON.parse(ok.output.toString("utf8"))).toEqual({
+      argv: codexSandboxArgs({ mode: "elevated" }),
+      command: 'node -e "console.log(1)"',
+      secret: null,
+    });
+
+    const failed = await executor.run({
+      command: "fail",
+      cwd: directory,
+      timeoutMs: 10_000,
+    });
+
+    expect(failed.exitCode).toBe(3);
+  });
+});
+
 });
