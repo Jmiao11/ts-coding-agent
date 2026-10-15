@@ -214,7 +214,7 @@ export function createHostExecutor(): CommandExecutor {
 
 
 /** 沙箱里的 cmd.exe 从这个环境变量读取要执行的命令 */
-const SANDBOX_COMMAND_ENV = "TSA_SANDBOX_COMMAND";
+export const SANDBOX_COMMAND_ENV = "TSA_SANDBOX_COMMAND";
 
 
 export type CodexSandboxMode = "elevated" | "mxc";
