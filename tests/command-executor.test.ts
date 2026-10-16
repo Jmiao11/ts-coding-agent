@@ -13,6 +13,10 @@ import {
 } from "node:path";
 
 import {
+  PassThrough,
+} from "node:stream";
+
+import {
   afterEach,
   describe,
   expect,
@@ -21,10 +25,12 @@ import {
 
 import {
   codexSandboxArgs,
+  collect,
   createCodexSandboxExecutor,
   type CommandExecutor,
   type CommandRequest,
   type CommandRunResult,
+  type RunningCommand,
 } from "../src/tools/command-executor.js";
 
 import {
@@ -193,4 +199,63 @@ describe("codex sandbox executor", () => {
   });
 });
 
+});
+
+
+describe("collect", () => {
+  function fakeRunning() {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const calls: string[] = [];
+    let finish: (code: number | null) => void = () => {};
+
+    const running: RunningCommand = {
+      stdout,
+      stderr,
+      kill() {
+        calls.push("kill");
+        finish(null);
+      },
+      wait() {
+        calls.push(stdout.listenerCount("data") > 0 ? "wait after listening" : "wait too early");
+        stdout.write("out\n");
+        stderr.write("err\n");
+        return new Promise((resolvePromise) => {
+          finish = resolvePromise;
+        });
+      },
+    };
+
+    return { running, calls };
+  }
+
+  it("listens before waiting and kills the command on timeout", async () => {
+    const { running, calls } = fakeRunning();
+
+    const result = await collect(running, { command: "x", cwd: "/work", timeoutMs: 50 });
+
+    expect(calls).toEqual(["wait after listening", "kill"]);
+    expect(result.timedOut).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.output.toString("utf8")).toContain("out\n");
+    expect(result.output.toString("utf8")).toContain("err\n");
+  });
+
+  it("kills the command when the run is aborted", async () => {
+    const { running, calls } = fakeRunning();
+    const controller = new AbortController();
+
+    const pending = collect(running, {
+      command: "x",
+      cwd: "/work",
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await pending;
+
+    expect(calls).toEqual(["wait after listening", "kill"]);
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
 });

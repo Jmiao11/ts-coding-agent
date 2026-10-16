@@ -3,6 +3,10 @@ import {
   type ChildProcess,
 } from "node:child_process";
 
+import type {
+  Readable,
+} from "node:stream";
+
 
 // 内存里最多保留的尾部字节数，防止刷屏命令撑爆内存
 const MAX_BUFFERED_BYTES = 400_000;
@@ -98,18 +102,35 @@ function killProcessTree(
 }
 
 
-/** 在本机用系统 shell 执行（Windows：cmd.exe，其他：/bin/sh）。没有沙箱。 */
-/**
- * const child = spawn("pnpm test", {
- *   shell: true
- * });
- *
- * const result = await collect(child, request);
- *
- * 收集一个已启动进程的输出，处理超时和中止。本机执行和沙箱执行共用。
- */
-async function collect(
+/** A started command, independent of how it was launched. */
+export type RunningCommand = {
+  stdout: Readable | null;
+  stderr: Readable | null;
+  kill(): void;
+  wait(): Promise<number | null>;
+};
+
+
+/** Adapt a Node child process to the common command interface. */
+export function fromChildProcess(
   child: ChildProcess,
+): RunningCommand {
+  return {
+    stdout: child.stdout,
+    stderr: child.stderr,
+    kill: () => killProcessTree(child),
+    wait: () =>
+      new Promise<number | null>((resolvePromise, reject) => {
+        child.once("error", reject);
+        child.once("close", resolvePromise);
+      }),
+  };
+}
+
+
+/** Collect output and handle timeout or abort for any already-started command. */
+export async function collect(
+  running: RunningCommand,
   request: CommandRequest,
 ): Promise<CommandRunResult> {
   /*
@@ -140,20 +161,20 @@ async function collect(
     }
   };
 
-  child.stdout?.on("data", append);
-  child.stderr?.on("data", append);
+  running.stdout?.on("data", append);
+  running.stderr?.on("data", append);
 
   let timedOut = false;
   let aborted = false;
 
   const timer = setTimeout(() => {
     timedOut = true;
-    killProcessTree(child);
+    running.kill();
   }, request.timeoutMs);
 
   const onAbort = (): void => {
     aborted = true;
-    killProcessTree(child);
+    running.kill();
   };
 
   request.signal?.addEventListener("abort", onAbort, {
@@ -163,16 +184,7 @@ async function collect(
   let exitCode: number | null;
 
   try {
-    exitCode = await new Promise<number | null>(
-      (resolvePromise, reject) => {
-        child.once("error", reject);
-
-        // close：进程退出且输出管道都已关闭
-        child.once("close", (code) => {
-          resolvePromise(code);
-        });
-      },
-    );
+    exitCode = await running.wait();
   } finally {
     clearTimeout(timer);
     request.signal?.removeEventListener("abort", onAbort);
@@ -207,7 +219,7 @@ export function createHostExecutor(): CommandExecutor {
       );
       // [标准输入 stdin, 标准输出 stdout, 错误输出 stderr]
 
-      return collect(child, request);
+      return collect(fromChildProcess(child), request);
     },
   };
 }
@@ -293,7 +305,7 @@ export function createCodexSandboxExecutor(
         },
       );
 
-      return collect(child, request);
+      return collect(fromChildProcess(child), request);
     },
   };
 }
