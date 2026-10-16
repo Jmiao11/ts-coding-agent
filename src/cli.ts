@@ -134,6 +134,10 @@ import {
 } from "./tools/codex-sandbox-check.js";
 
 import {
+  setupMxcSandbox,
+} from "./tools/mxc-setup.js";
+
+import {
   createSearchTextTool,
 } from "./tools/search-text.js";
 
@@ -163,8 +167,9 @@ const HELP = `用法：
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
-      --sandbox <host|codex>  run_command 在哪里执行（默认 host：本机，没有隔离）
+      --sandbox <host|codex|mxc>  run_command 在哪里执行（默认 host：本机，没有隔离）
                           codex：通过 codex sandbox 执行（只支持 Windows，需要 AGENT_CODEX_EXE）
+                          mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
@@ -172,6 +177,7 @@ const HELP = `用法：
   可选：AGENT_THINKING=enabled 或 disabled（DeepSeek：显式开启或关闭 thinking）
    --sandbox codex 时：AGENT_CODEX_EXE=codex.exe 的完整路径（不能是 codex.cmd）
                       AGENT_SANDBOX_MODE=elevated（默认）或 mxc
+  --sandbox mxc 时：AGENT_MXC_READONLY=额外只读授权的目录，用分号分隔（默认只授权 node 所在目录）
 
 交互模式：/exit、Ctrl+C 或 Ctrl+D 退出；任务运行中按 Ctrl+C 只中止当前任务。
 任何时候连按两次 Ctrl+C 都会强制退出。`;
@@ -348,8 +354,8 @@ if (gitStatus.stdout.trim().length > 0) {
 
 const sandbox = values.sandbox ?? "host";
 
-if (sandbox !== "host" && sandbox !== "codex") {
-  fail(`--sandbox 只能是 host 或 codex（收到：${sandbox}）。`);
+if (sandbox !== "host" && sandbox !== "codex" && sandbox !== "mxc") {
+  fail(`--sandbox 只能是 host、codex 或 mxc（收到：${sandbox}）。`);
 }
 
 let commandExecutor: CommandExecutor;
@@ -358,7 +364,7 @@ let sandboxLabel: string;
 if (sandbox === "host") {
   commandExecutor = createHostExecutor();
   sandboxLabel = "host（命令直接在本机执行，没有隔离）";
-} else {
+} else if (sandbox === "codex") {
   if (process.platform !== "win32") {
     fail("--sandbox codex 目前只支持 Windows。");
   }
@@ -406,6 +412,24 @@ if (sandbox === "host") {
     + (clearEnv.length > 0
       ? `，已清空 Codex 配置注入的变量：${clearEnv.join(", ")}`
       : "");
+} else {
+  console.log("正在检查 MXC 沙箱…");
+
+  try {
+    const mxc = await setupMxcSandbox(workspaceRoot);
+
+    commandExecutor = mxc.executor;
+    sandboxLabel = mxc.label;
+
+    for (const warning of mxc.warnings) {
+      console.warn(`⚠ MXC：${warning}`);
+    }
+  } catch (error) {
+    fail(
+      `${error instanceof Error ? error.message : String(error)}\n\n`
+      + "不会退回本机执行。确实要在本机执行命令，请去掉 --sandbox mxc。",
+    );
+  }
 }
 
 

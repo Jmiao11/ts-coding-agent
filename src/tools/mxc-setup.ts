@@ -1,0 +1,135 @@
+import {
+  spawnSync,
+} from "node:child_process";
+
+import {
+  mkdirSync,
+} from "node:fs";
+
+import {
+  tmpdir,
+} from "node:os";
+
+import {
+  dirname,
+  join,
+} from "node:path";
+
+import type {
+  CommandExecutor,
+} from "./command-executor.js";
+
+import {
+  mapWorkspaceToDrive,
+} from "./drive-mapping.js";
+
+import {
+  checkMxcIsolation,
+  createMxcExecutor,
+  mxcEnvironment,
+  type MxcSdk,
+} from "./mxc-executor.js";
+
+
+const MXC_SDK_MODULE = "@microsoft/mxc-sdk/v1";
+
+
+type MxcSdkModule = MxcSdk & {
+  getPlatformSupport(): {
+    isSupported: boolean;
+    reason?: string;
+    isolationTier?: string;
+    isolationWarnings?: string[];
+  };
+};
+
+
+export type MxcSandbox = {
+  executor: CommandExecutor;
+  label: string;
+  warnings: string[];
+};
+
+
+export async function setupMxcSandbox(
+  workspaceRoot: string,
+): Promise<MxcSandbox> {
+  if (process.platform !== "win32") {
+    throw new Error("--sandbox mxc 目前只支持 Windows。");
+  }
+
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+
+  if (nodeMajor < 24) {
+    throw new Error(
+      `MXC SDK 需要 Node.js 24 或更高版本（当前 ${process.version}，路径 ${process.execPath}）。`,
+    );
+  }
+
+  let sdk: MxcSdkModule;
+
+  try {
+    sdk = (await import(MXC_SDK_MODULE)) as MxcSdkModule;
+  } catch (error) {
+    throw new Error(
+      `无法加载 ${MXC_SDK_MODULE}：${error instanceof Error ? error.message : String(error)}\n`
+      + "它是可选依赖，请在项目目录运行 pnpm install。",
+    );
+  }
+
+  // getAvailableBackends() 在 SDK 装于中文路径时会因 UTF-8 路径切片而 panic。
+  const support = sdk.getPlatformSupport();
+
+  if (!support.isSupported) {
+    throw new Error(`这台机器不支持 MXC：${support.reason || "未知原因"}`);
+  }
+
+  const mapping = mapWorkspaceToDrive(workspaceRoot);
+
+  try {
+    mkdirSync(join(workspaceRoot, ".agent-harness", "tmp"), { recursive: true });
+
+    const autocrlf = spawnSync(
+      "git",
+      ["config", "--get", "core.autocrlf"],
+      { cwd: workspaceRoot, encoding: "utf8" },
+    );
+    const autocrlfValue = autocrlf.status === 0 ? autocrlf.stdout.trim() : "";
+    const nodeDirectory = dirname(process.execPath);
+    const readonlyPaths = [
+      nodeDirectory,
+      ...(process.env.AGENT_MXC_READONLY ?? "")
+        .split(";")
+        .map((path) => path.trim())
+        .filter((path) => path.length > 0),
+    ];
+    const environment = mxcEnvironment(process.env, {
+      tempDir: join(mapping.root, ".agent-harness", "tmp"),
+      ...(autocrlfValue ? { autocrlf: autocrlfValue } : {}),
+    });
+
+    environment.PATH = `${nodeDirectory};${environment.PATH ?? ""}`;
+
+    const executor = createMxcExecutor({
+      sdk,
+      mapping,
+      readonlyPaths,
+      environment,
+    });
+
+    await checkMxcIsolation(
+      executor,
+      workspaceRoot,
+      join(tmpdir(), `tsa-mxc-selfcheck-${process.pid}.txt`),
+    );
+
+    return {
+      executor,
+      label: `mxc（实验性，${support.isolationTier ?? "未知隔离等级"}，工作区映射为 ${mapping.drive}）`,
+      warnings: support.isolationWarnings ?? [],
+    };
+  } catch (error) {
+    mapping.release();
+    throw error;
+  }
+}
