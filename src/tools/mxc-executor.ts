@@ -3,9 +3,27 @@ import type {
 } from "node:stream";
 
 import {
+  existsSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
+
+import {
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
+
+import {
   collect,
   type CommandExecutor,
 } from "./command-executor.js";
+
+import {
+  decodeOutput,
+} from "./run-command.js";
 
 
 /** 沙箱里允许传入的宿主环境变量名；其余变量一律不传。 */
@@ -176,4 +194,61 @@ export function createMxcExecutor(
       }
     },
   };
+}
+
+
+/** Verify workspace writes and host-side blocking of writes outside the workspace. */
+export async function checkMxcIsolation(
+  executor: CommandExecutor,
+  workspaceRoot: string,
+  outsidePath: string,
+): Promise<void> {
+  const workspace = resolve(workspaceRoot);
+  const outside = resolve(outsidePath);
+  const outsideRelative = relative(workspace, outside);
+
+  const isOutsideWorkspace =
+    outsideRelative === ".."
+    || outsideRelative.startsWith(`..${sep}`)
+    || isAbsolute(outsideRelative);
+
+  if (!isOutsideWorkspace) {
+    throw new Error(`MXC 自检路径必须位于工作区外：${outside}`);
+  }
+
+  if (existsSync(outside)) {
+    throw new Error(`MXC 自检路径已存在，拒绝覆盖：${outside}`);
+  }
+
+  const insideRelative = join(".agent-harness", "tmp", "mxc-selfcheck.txt");
+  const insidePath = join(workspace, insideRelative);
+  mkdirSync(join(workspace, ".agent-harness", "tmp"), { recursive: true });
+  rmSync(insidePath, { force: true });
+
+  const run = (command: string) =>
+    executor.run({ command, cwd: workspace, timeoutMs: 60_000 });
+
+  try {
+    const inside = await run(`echo ok> "${insideRelative}"`);
+
+    if (inside.exitCode !== 0 || !existsSync(insidePath)) {
+      throw new Error(
+        `MXC 沙箱里的命令无法写入工作区（退出码 ${inside.exitCode}）：`
+        + (decodeOutput(inside.output).trim().slice(-500) || "(no output)"),
+      );
+    }
+
+    rmSync(insidePath, { force: true });
+    await run(`echo x> "${outside}"`);
+
+    if (existsSync(outside)) {
+      throw new Error(`MXC 沙箱没有拦住工作区外的写入（${outside}），拒绝启动。`);
+    }
+  } finally {
+    rmSync(insidePath, { force: true });
+
+    if (existsSync(outside)) {
+      rmSync(outside, { force: true });
+    }
+  }
 }
