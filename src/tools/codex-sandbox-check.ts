@@ -16,12 +16,13 @@ const END = "TSA_ENV_END";
 
 /*
  * 在沙箱里只打印「有值的」环境变量名，不打印值：值可能就是要找的密钥。
+ * 例外：GIT_CONFIG_KEY_n 的值是 Git 配置项名称（如 safe.directory），不是密钥。
  * 被清空（set.NAME=""）的变量值为空，不会再出现。
  * 脚本里不能有双引号、$、%：它要原样经过 cmd（Windows）或 sh（测试）。
  */
 const PROBE_SCRIPT =
   `const e=process.env;console.log('${BEGIN}');`
-  + "for(const k of Object.keys(e))if(e[k])console.log(k);"
+  + "for(const k of Object.keys(e))if(e[k])console.log(k.toUpperCase().startsWith('GIT_CONFIG_KEY_')?k+'='+e[k]:k);"
   + `console.log('${END}')`;
 
 // 第一次运行 elevated 时 Codex 可能要做初始化，给宽一点
@@ -30,8 +31,12 @@ const PROBE_TIMEOUT_MS = 60_000;
 // 能安全写进 -c shell_environment_policy.set.NAME="" 的名字
 const SAFE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/* Codex 沙箱通过这组变量设置 Git 安全目录；其他 Git 配置仍视为注入。 */
+const GIT_CONFIG_VARIABLE = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
+const CODEX_GIT_CONFIG_KEYS = new Set(["safe.directory"]);
 
-/** 取出标记之间的变量名；没有标记说明探测命令没跑起来 */
+
+/** 取出标记之间的变量名（GIT_CONFIG_KEY_n 会带配置项名）；没有标记说明探测命令没跑起来 */
 export function parseEnvProbe(
   text: string,
 ): string[] | undefined {
@@ -48,29 +53,52 @@ export function parseEnvProbe(
 }
 
 
+/** 探测行拆成变量名和值；从第二个字符找 =，兼容 =C: 这种变量名。 */
+function splitProbeLine(
+  line: string,
+): { name: string; value?: string } {
+  const index = line.indexOf("=", 1);
+
+  return index === -1
+    ? { name: line }
+    : { name: line.slice(0, index), value: line.slice(index + 1) };
+}
+
+
 /**
  * 沙箱里有、本机同样的命令里没有的变量名。
- * 和本机执行比较，而不是和我们传的 env 比较：cmd 自己也会加变量（比如 PROMPT），两边会抵消。
- * Windows 的变量名不分大小写，所以统一按大写比较。
- * 不算注入的：我们自己传命令用的 TSA_SANDBOX_COMMAND；Codex 给沙箱进程加的 CODEX_* 标记；
- * cmd 记录各盘符当前目录的隐藏变量（=C: 这类）。
+ * 比较变量名而非传入 env，因为 shell 也会添加变量；Windows 名称不区分大小写。
+ * TSA_SANDBOX_COMMAND、CODEX_*、cmd 的 =C: 变量，以及 Codex 的 safe.directory 配置不算注入。
  */
 export function findInjectedEnv(
-  sandboxNames: string[],
-  hostNames: string[],
+  sandboxLines: string[],
+  hostLines: string[],
 ): string[] {
   const host = new Set(
-    hostNames.map((name) => name.toUpperCase()),
+    hostLines.map((line) => splitProbeLine(line).name.toUpperCase()),
   );
 
-  return sandboxNames.filter((name) => {
-    const upper = name.toUpperCase();
+  const injected = sandboxLines
+    .map(splitProbeLine)
+    .filter(({ name }) => {
+      const upper = name.toUpperCase();
 
-    return !host.has(upper)
-      && upper !== SANDBOX_COMMAND_ENV
-      && !upper.startsWith("CODEX_")
-      && !upper.startsWith("=");
-  });
+      return !host.has(upper)
+        && upper !== SANDBOX_COMMAND_ENV
+        && !upper.startsWith("CODEX_")
+        && !upper.startsWith("=");
+    });
+
+  const onlyCodexGitConfig = injected
+    .filter(({ name }) => /^GIT_CONFIG_KEY_/i.test(name))
+    .every(({ value }) => CODEX_GIT_CONFIG_KEYS.has((value ?? "").toLowerCase()));
+
+  return injected
+    .filter(({ name }) => {
+      const isGitConfig = GIT_CONFIG_VARIABLE.test(name.toUpperCase());
+      return !(onlyCodexGitConfig && isGitConfig);
+    })
+    .map(({ name }) => name);
 }
 
 
@@ -166,6 +194,7 @@ export async function prepareCodexSandbox(
   if (remaining.length > 0) {
     throw new SandboxCheckError(
       `清空后沙箱命令里仍有注入的环境变量：${remaining.join(", ")}。`
+      + `（第一次检查发现：${injected.join(", ")}）。`
       + "为避免把它们暴露给模型执行的命令，拒绝启动。"
       + "请检查 Codex 配置里的 shell_environment_policy。",
     );

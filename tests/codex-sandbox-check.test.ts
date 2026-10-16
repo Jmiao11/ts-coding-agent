@@ -47,14 +47,47 @@ describe("env probe parsing", () => {
       ),
     ).toEqual(["ANTHROPIC_AUTH_TOKEN"]);
   });
+
+  it("lets Codex's own safe.directory git config through, but not any other git config", () => {
+    const codexGitConfig = [
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0=safe.directory",
+      "GIT_CONFIG_VALUE_0",
+    ];
+
+    expect(findInjectedEnv(codexGitConfig, [])).toEqual([]);
+
+    expect(
+      findInjectedEnv(
+        [...codexGitConfig, "GIT_CONFIG_KEY_1=core.sshCommand", "GIT_CONFIG_VALUE_1"],
+        [],
+      ),
+    ).toEqual([
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_VALUE_0",
+      "GIT_CONFIG_KEY_1",
+      "GIT_CONFIG_VALUE_1",
+    ]);
+  });
 });
 
 
 describe("prepareCodexSandbox", () => {
   let directory: string;
   let fakeCodex: string;
+  let savedGitConfig: Record<string, string | undefined>;
 
   beforeEach(async () => {
+    savedGitConfig = {};
+
+    for (const name of Object.keys(process.env)) {
+      if (name.toUpperCase().startsWith("GIT_CONFIG_")) {
+        savedGitConfig[name] = process.env[name];
+        delete process.env[name];
+      }
+    }
+
     directory = await mkdtemp(join(tmpdir(), "agent-harness-"));
 
     /*
@@ -73,6 +106,7 @@ describe("prepareCodexSandbox", () => {
         'const env = { ...process.env, FAKE_INJECTED_TOKEN: "secret" };',
         'if (argv.includes("--stubborn")) env.FAKE_STUBBORN = "secret";',
         'for (const name of cleared) if (name !== "FAKE_STUBBORN") env[name] = "";',
+        'Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: process.cwd() });',
         'const result = spawnSync(process.env.TSA_SANDBOX_COMMAND, { shell: true, env, stdio: "inherit" });',
         "process.exit(result.status ?? 1);",
       ].join("\n"),
@@ -81,6 +115,7 @@ describe("prepareCodexSandbox", () => {
   });
 
   afterEach(async () => {
+    Object.assign(process.env, savedGitConfig);
     await rm(directory, { recursive: true, force: true });
   });
 
