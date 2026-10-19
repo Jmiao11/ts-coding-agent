@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 
-import { Loader } from "@earendil-works/pi-tui";
+import { Loader, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
   Terminal,
@@ -80,6 +80,18 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("fits the complete Chinese shortcut hint into exactly 120 terminal columns", async () => {
+    const { terminal, view } = setup();
+    terminal.width = 120;
+    view.status("中文工作区 · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
+    await settle();
+    const bar = terminal.text().split(/\r?\n/).find((line) => line.includes("Enter 发送"));
+    expect(bar).toBeDefined();
+    expect(bar!.endsWith("Enter 发送 · Ctrl+O 详情 · /help")).toBe(true);
+    expect(visibleWidth(bar!)).toBe(120);
+    view.close();
+  });
+
   it("preserves plain header bytes and diagnostic ordering", () => {
     const output = new PassThrough();
     let written = "";

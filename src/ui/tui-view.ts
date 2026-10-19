@@ -99,9 +99,9 @@ export function createTuiView(
     render(width) {
       const right = "Enter 发送 · Ctrl+O 详情 · /help";
       const room = width - visibleWidth(right) - 2;
-      if (room <= 0) return [dim(truncateToWidth(right, width))];
-      const left = truncateToWidth(statusText, room);
-      return [dim(left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right)];
+      if (room <= 0) return [dim(truncateToWidth(right, width, "…", true))];
+      const left = truncateToWidth(statusText, room, "…", true);
+      return [dim(`${left}  ${right}`)];
     },
   };
 

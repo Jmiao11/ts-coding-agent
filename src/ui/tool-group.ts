@@ -1,4 +1,4 @@
-import { Loader, Text, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Loader, Text, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
 
@@ -59,7 +59,7 @@ export class ToolActivityGroup implements Component {
     let heading: string[];
     if (!this.ended) {
       const running = tools.find((tool) => tool.ok === undefined)?.label ?? this.current;
-      const message = truncateToWidth(`${running} · 已完成 ${completed} 项`, Math.max(1, width - 4));
+      const message = truncateToWidth(`${running} · 已完成 ${completed} 项`, Math.max(0, width - visibleWidth(" ⠋  ")));
       if (message !== this.loaderMessage) {
         this.loaderMessage = message;
         this.loader.setMessage(message);
@@ -69,7 +69,7 @@ export class ToolActivityGroup implements Component {
       const title = this.aborted ? `■ 已中止 · 已完成 ${completed} 项`
         : failed > 0 ? `✗ ${tools.length} 次工具调用，其中 ${failed} 次失败`
         : `✓ ${tools.length} 次工具调用`;
-      heading = new Text(dim(`${title} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O ${this.expanded ? "收起" : "展开"}`), 0, 0).render(width);
+      heading = [dim(truncateToWidth(`${title} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O ${this.expanded ? "收起" : "展开"}`, width))];
     }
     for (const tool of tools.filter((item) => this.expanded || item.ok === false)) {
       const marker = tool.ok === undefined ? "⋯" : tool.ok ? "✓" : "✗";
