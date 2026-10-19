@@ -98,10 +98,12 @@ export function createTuiView(
     invalidate() {},
     render(width) {
       const right = "Enter 发送 · Ctrl+O 详情 · /help";
-      const room = width - visibleWidth(right) - 2;
-      if (room <= 0) return [dim(truncateToWidth(right, width, "…", true))];
+      // 末列只留空白，避免提示文字碰到终端的自动换行边界。
+      const contentWidth = Math.max(0, width - 1);
+      const room = contentWidth - visibleWidth(right) - 2;
+      if (room <= 0) return [dim(`${truncateToWidth(right, contentWidth, "…", true)} `)];
       const left = truncateToWidth(statusText, room, "…", true);
-      return [dim(`${left}  ${right}`)];
+      return [dim(`${left}  ${right} `)];
     },
   };
 
@@ -313,10 +315,10 @@ export function createTuiView(
       tui.requestRender();
     },
 
-    toolStart(id, name, summary) {
+    toolStart(id, name, summary, skill) {
       const current = ensureGroup();
       runningTools.set(id, current);
-      current.start(id, name, summary);
+      current.start(id, name, summary, skill);
     },
 
     toolEnd(id, ok, detail) {

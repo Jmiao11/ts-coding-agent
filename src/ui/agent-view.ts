@@ -57,7 +57,7 @@ export type AgentView = {
   close(): void;
 
   /** 一个工具开始执行；id 用来匹配结束事件，summary 可能为空 */
-  toolStart(id: string, name: string, summary: string): void;
+  toolStart(id: string, name: string, summary: string, skill?: string): void;
 
   /** 这个工具执行结束 */
   toolEnd(id: string, ok: boolean, detail?: string): void;

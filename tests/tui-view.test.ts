@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 
-import { Loader, visibleWidth } from "@earendil-works/pi-tui";
+import { Loader, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
   Terminal,
@@ -80,15 +80,46 @@ function setup() {
 
 
 describe("tui view", () => {
-  it("fits the complete Chinese shortcut hint into exactly 120 terminal columns", async () => {
+  it("lists deduplicated skill names in the collapsed group heading", () => {
     const { terminal, view } = setup();
     terminal.width = 120;
+    view.toolStart("a", "read_file", "SKILL.md", "mcp-builder");
+    view.toolEnd("a", true, "hidden skill instructions");
+    view.toolStart("b", "read_file", "SKILL.md", "mcp-builder");
+    view.toolEnd("b", true);
+    view.toolStart("c", "read_file", "SKILL.md", "frontend-design");
+    view.toolEnd("c", true);
+    view.beginAnswer();
+    view.close();
+    expect(terminal.text()).toContain("✓ 3 次工具调用 · skill: mcp-builder, frontend-design");
+    expect(terminal.text()).not.toContain("hidden skill instructions");
+  });
+
+  it.each([100, 120, 138, 180])("fits the complete Chinese shortcut hint into exactly %i terminal columns", async (width) => {
+    const { terminal, view } = setup();
+    terminal.width = width;
     view.status("中文工作区 · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
     await settle();
     const bar = terminal.text().split(/\r?\n/).find((line) => line.includes("Enter 发送"));
     expect(bar).toBeDefined();
-    expect(bar!.endsWith("Enter 发送 · Ctrl+O 详情 · /help")).toBe(true);
-    expect(visibleWidth(bar!)).toBe(120);
+    expect(bar!.trimEnd().endsWith("Enter 发送 · Ctrl+O 详情 · /help")).toBe(true);
+    expect(visibleWidth(bar!)).toBe(width);
+    expect(visibleWidth(bar!.trimEnd())).toBe(width - 1);
+    view.close();
+  });
+
+  it("keeps the hint before the right margin after resizing through 100, 138 and 180 columns", async () => {
+    const { terminal, view } = setup();
+    for (const width of [100, 138, 180]) {
+      terminal.width = width;
+      const offset = terminal.written.length;
+      view.status("中文工作区 · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
+      await settle();
+      const rendered = stripTerminalSequences(terminal.written.slice(offset));
+      const bar = rendered.split(/\r?\n/).find((line) => line.includes("Enter 发送"));
+      expect(bar?.trimEnd()).toMatch(/Enter 发送 · Ctrl\+O 详情 · \/help$/);
+      expect(visibleWidth(bar!.trimEnd())).toBe(width - 1);
+    }
     view.close();
   });
 

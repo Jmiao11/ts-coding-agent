@@ -9,6 +9,7 @@ type Approval = { question: string; command: string; answer?: boolean };
 /** 一步中的工具共用一个 Loader；结束后只保留摘要和失败详情。 */
 export class ToolActivityGroup implements Component {
   private tools = new Map<string, Tool>();
+  private skills = new Set<string>();
   private approvals: Approval[] = [];
   private loader: Loader;
   private started = Date.now();
@@ -23,7 +24,8 @@ export class ToolActivityGroup implements Component {
     this.loader = new Loader(tui, dim, dim);
   }
 
-  start(id: string, name: string, summary: string): void {
+  start(id: string, name: string, summary: string, skill?: string): void {
+    if (skill !== undefined) this.skills.add(skill);
     this.current = summary ? `${name} ${summary}` : name;
     this.tools.set(id, { label: this.current });
     this.tui.requestRender();
@@ -83,7 +85,8 @@ export class ToolActivityGroup implements Component {
       const title = this.aborted ? `■ 已中止 · 已完成 ${completed} 项`
         : failed > 0 ? `✗ ${tools.length} 次工具调用，其中 ${failed} 次失败`
         : `✓ ${tools.length} 次工具调用`;
-      heading = [dim(truncateToWidth(`${title} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O ${this.expanded ? "收起" : "展开"}`, width))];
+      const skills = this.skills.size > 0 ? ` · skill: ${[...this.skills].join(", ")}` : "";
+      heading = [dim(truncateToWidth(`${title}${skills} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O ${this.expanded ? "收起" : "展开"}`, width))];
     }
     for (const approval of this.approvals) {
       if (approval.answer === undefined) {

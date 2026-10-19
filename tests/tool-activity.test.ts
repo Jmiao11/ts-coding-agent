@@ -46,6 +46,19 @@ describe("describeToolCall", () => {
 
 
 describe("showToolActivity", () => {
+  it("passes the skill name only for reads of SKILL.md", () => {
+    const calls: unknown[][] = [];
+    const onEvent = showToolActivity({
+      toolStart: (...args) => { calls.push(args); },
+      toolEnd() {},
+    });
+    for (const path of [".agent/skills/mcp-builder/SKILL.md", "README.md"]) {
+      onEvent({ type: "tool_execution_start", toolCallId: path, toolName: "read_file", args: { path } });
+    }
+    expect(calls[0]?.[3]).toBe("mcp-builder");
+    expect(calls[1]?.[3]).toBeUndefined();
+  });
+
   it.each([
     [{ content: [{ type: "text", text: "first" }, { type: "image" }, { type: "text", text: "second" }] }, "firstsecond"],
     [{ content: [{ type: "text", text: "" }] }, ""],

@@ -6,6 +6,8 @@ import type {
   AgentView,
 } from "./agent-view.js";
 
+import { skillReadBy } from "../skills/skill-usage.js";
+
 
 const SUMMARY_ARGUMENT: Record<string, string> = {
   list_directory: "path",
@@ -55,6 +57,7 @@ export function showToolActivity(
         event.toolCallId,
         event.toolName,
         describeToolCall(event.toolName, event.args),
+        skillReadBy(event.toolName, event.args),
       );
     }
 
