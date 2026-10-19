@@ -84,6 +84,10 @@ import {
 } from "./prompts/coding-system-prompt.js";
 
 import {
+  loadSkillCatalog,
+} from "./skills/skill-catalog.js";
+
+import {
   createTaskTool,
   type TaskDetails,
 } from "./tools/task.js";
@@ -978,6 +982,13 @@ const taskTool = createTaskTool({
   ],
 });
 
+// 启动时扫描一次；改了 skill 要重启才生效
+const skillCatalog = await loadSkillCatalog(workspaceRoot);
+
+for (const warning of skillCatalog.warnings) {
+  view.warn(`⚠ ${warning}`);
+}
+
 const agent = new Agent({
   initialState: {
     model,
@@ -986,7 +997,7 @@ const agent = new Agent({
     messages: restored?.messages ?? [],
 
     systemPrompt:
-      createCodingSystemPrompt(workspaceRoot, { sandbox }),
+      createCodingSystemPrompt(workspaceRoot, { sandbox, skills: skillCatalog.skills }),
 
     tools: [
       createListDirectoryTool(workspaceRoot),
@@ -1593,6 +1604,11 @@ view.header({
   sandbox: sandboxLabel,
   thinking: thinking ?? "(provider default)",
 });
+
+if (skillCatalog.skills.length > 0) {
+  view.info(`skills: ${skillCatalog.skills.map((skill) => skill.name).join(", ")}`);
+}
+
 view.log(format(
   "session:",
   restored
