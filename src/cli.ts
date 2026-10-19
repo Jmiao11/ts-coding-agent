@@ -20,10 +20,6 @@ import {
 } from "node:path";
 
 import {
-  createInterface,
-} from "node:readline/promises";
-
-import {
   parseArgs,
 } from "node:util";
 
@@ -144,6 +140,10 @@ import {
 import {
   createWriteFileTool,
 } from "./tools/write-file.js";
+
+import {
+  createPlainView,
+} from "./ui/plain-view.js";
 
 import type {
   AgentMessage,
@@ -454,45 +454,11 @@ function formatTime(
 }
 
 
-/**
- * 读一行输入。Ctrl+C 或 Ctrl+D（输入流关闭）时返回 null，由调用方决定怎么处理。
- * 用于选会话和 REPL 提示符；命令确认另有自己的处理（Ctrl+C 要中止 Agent）。
- */
-async function promptLine(
-  question: string,
-): Promise<string | null> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<string | null>((resolvePromise) => {
-    let settled = false;
-
-    const settle = (value: string | null): void => {
-      if (!settled) {
-        settled = true;
-        resolvePromise(value);
-      }
-    };
-
-    rl.on("SIGINT", () => {
-      console.log();
-      settle(null);
-      rl.close();
-    });
-
-    rl.once("close", () => settle(null));
-
-    rl.question(question).then(
-      (answer) => {
-        settle(answer);
-        rl.close();
-      },
-      () => settle(null),
-    );
-  });
-}
+// 所有屏幕输出和用户输入都经过 view（见 src/ui/agent-view.ts）
+const view = createPlainView({
+  // 确认问题期间的 Ctrl+C 由 readline 收到，转成中止当前任务
+  onInterrupt: () => handleInterrupt(),
+});
 
 
 // ---------- Session：每条完整消息追加一行 JSONL ----------
@@ -533,9 +499,11 @@ async function pickSession(
     );
   }
 
-  const answer = await promptLine(
+// pickSession 里
+  const answer = await view.readLine(
     "\n继续哪一个？输入编号（直接回车取消）：",
   );
+
 
   const choice = Number(answer?.trim() ?? "");
 
@@ -697,45 +665,7 @@ function handleInterrupt(): void {
 process.on("SIGINT", handleInterrupt);
 
 
-// ---------- 命令确认 ----------
 
-async function askInTerminal(
-  command: string,
-): Promise<boolean> {
-  // 非交互环境没人能回答：一律拒绝
-  if (!process.stdin.isTTY) {
-    return false;
-  }
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  // 询问期间 Ctrl+C 由 readline 接收：转成中止，并当作拒绝
-  rl.on("SIGINT", () => {
-    rl.close();
-    handleInterrupt();
-  });
-
-  const closed = new Promise<string>((resolvePromise) => {
-    rl.once("close", () => resolvePromise(""));
-  });
-
-  try {
-    const answer = await Promise.race([
-      rl
-        .question(`\n⚠ Agent 想执行：${command}\n允许吗？[y/N] `)
-        .catch(() => ""),
-      closed,
-    ]);
-
-    return answer.trim().toLowerCase() === "y";
-  } finally {
-    // 每次问完就 close，否则 stdin 一直打开，进程无法退出
-    rl.close();
-  }
-}
 
 
 // ---------- 统计 ----------
@@ -1058,7 +988,8 @@ const agent = new Agent({
     extensions: [
       budget,
       createCommandApprovalExtension({
-        approve: askInTerminal,
+        approve: (command) =>
+          view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`),
       }),
       createLoggerExtension(),
     ],
@@ -1474,9 +1405,7 @@ const replCommands: ReplCommand[] = [
 
       console.log("对话记录不会改变；run_command 造成的改动不在其中。");
 
-      const answer = await promptLine("确认撤销吗？[y/N] ");
-
-      if (answer?.trim().toLowerCase() !== "y") {
+      if (!(await view.confirm("确认撤销吗？"))) {
         console.log("已取消。");
         return "continue";
       }
@@ -1572,7 +1501,7 @@ async function runRepl(): Promise<void> {
   printLastUserMessage(restored?.messages ?? []);
 
   while (true) {
-    const line = await promptLine("\n> ");
+    const line = await view.readLine("\n> ");
 
     // Ctrl+C / Ctrl+D
     if (line === null) {
