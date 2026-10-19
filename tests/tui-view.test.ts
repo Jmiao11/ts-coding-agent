@@ -77,6 +77,52 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("only exposes successful output when Ctrl+O expands the latest group", async () => {
+    const { terminal, view } = setup();
+    view.toolStart("a", "run_command", "echo success");
+    view.toolEnd("a", true, "success-detail");
+    const input = view.readLine("> ");
+    terminal.type("draft");
+    await settle();
+    expect(terminal.text()).not.toContain("success-detail");
+    terminal.type("\x0f");
+    await settle();
+    expect(terminal.text()).toContain("  ✓ run_command echo success");
+    expect(terminal.text()).toContain("    success-detail");
+    const offset = terminal.written.length;
+    terminal.type("\x0f");
+    await settle();
+    expect(terminal.written.slice(offset)).not.toContain("success-detail");
+    terminal.type("\r");
+    expect(await input).toBe("draft");
+    view.close();
+  });
+
+  it("consumes Ctrl+O during approval without answering and only toggles the newest group", async () => {
+    const { terminal, view } = setup();
+    view.toolStart("a", "read_file", "old.ts");
+    view.toolEnd("a", true, "old-detail");
+    view.beginAnswer();
+    view.appendAnswer("next");
+    view.endAnswer();
+    view.toolStart("b", "read_file", "new.ts");
+    view.toolEnd("b", true, "new-detail");
+    let answered = false;
+    const confirmation = view.confirm("允许吗？").then((value) => { answered = true; return value; });
+    terminal.type("\x0f");
+    await settle();
+    expect(answered).toBe(false);
+    expect(terminal.text()).toContain("new-detail");
+    expect(terminal.text()).not.toContain("old-detail");
+    terminal.type("y");
+    expect(await confirmation).toBe(true);
+    view.toolStart("c", "read_file", "after-approval.ts");
+    view.toolEnd("c", true);
+    terminal.type("\x0f");
+    view.close();
+    expect(terminal.text()).toContain("after-approval");
+  });
+
   it("groups successful tools and hides their details", async () => {
     const { terminal, view } = setup();
     view.toolStart("a", "read_file", "README.md");

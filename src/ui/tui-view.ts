@@ -100,6 +100,7 @@ export function createTuiView(
   let stopped = false;
   let debug = false;
   let group: ToolActivityGroup | undefined;
+  let latestGroup: ToolActivityGroup | undefined;
   const runningTools = new Map<string, ToolActivityGroup>();
 
   function finishGroup(aborted = false): void {
@@ -133,6 +134,12 @@ export function createTuiView(
 
   // 输入先经过这里，再交给输入框；consume: true 表示这个按键到此为止
   tui.addInputListener((data) => {
+    if (matchesKey(data, "ctrl+o")) {
+      // 只改最近一组：更早的组可能已进回滚区，TuiMainScreen 会因 firstChanged < viewportTop 清屏重画。
+      latestGroup?.toggle();
+      return { consume: true };
+    }
+
     if (pendingConfirm) {
       const resolveConfirm = pendingConfirm;
       pendingConfirm = undefined;
@@ -254,6 +261,7 @@ export function createTuiView(
     toolStart(id, name, summary) {
       if (!group) {
         group = new ToolActivityGroup(tui);
+        latestGroup = group;
         history.addChild(group);
       }
       runningTools.set(id, group);

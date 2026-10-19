@@ -14,6 +14,7 @@ export class ToolActivityGroup implements Component {
   private aborted = false;
   private current = "";
   private loaderMessage = "";
+  private expanded = false;
 
   constructor(private tui: TUI) {
     this.loader = new Loader(tui, dim, dim);
@@ -42,6 +43,11 @@ export class ToolActivityGroup implements Component {
     this.tui.requestRender();
   }
 
+  toggle(): void {
+    this.expanded = !this.expanded;
+    this.tui.requestRender();
+  }
+
   invalidate(): void {
     this.loader.invalidate();
   }
@@ -63,10 +69,11 @@ export class ToolActivityGroup implements Component {
       const title = this.aborted ? `■ 已中止 · 已完成 ${completed} 项`
         : failed > 0 ? `✗ ${tools.length} 次工具调用，其中 ${failed} 次失败`
         : `✓ ${tools.length} 次工具调用`;
-      heading = new Text(dim(`${title} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O 展开`), 0, 0).render(width);
+      heading = new Text(dim(`${title} · ${(this.elapsed / 1000).toFixed(1)}s · Ctrl+O ${this.expanded ? "收起" : "展开"}`), 0, 0).render(width);
     }
-    for (const tool of tools.filter((item) => item.ok === false)) {
-      heading.push(...new Text(`  ✗ ${tool.label}`, 0, 0).render(width));
+    for (const tool of tools.filter((item) => this.expanded || item.ok === false)) {
+      const marker = tool.ok === undefined ? "⋯" : tool.ok ? "✓" : "✗";
+      heading.push(...new Text(`  ${marker} ${tool.label}`, 0, 0).render(width));
       if (tool.detail) {
         const lines = tool.detail.split(/\r?\n/);
         if (lines.at(-1) === "") lines.pop();
