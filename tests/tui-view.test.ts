@@ -6,7 +6,10 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
+
+import { Loader } from "@earendil-works/pi-tui";
 
 import type {
   Terminal,
@@ -74,33 +77,79 @@ function setup() {
 
 
 describe("tui view", () => {
-  it("shows a tool as running, then marks it done in place", async () => {
+  it("groups successful tools and hides their details", async () => {
     const { terminal, view } = setup();
-
     view.toolStart("a", "read_file", "README.md");
     await settle();
-    expect(terminal.text()).toContain("⋯ read_file README.md");
-
-    view.toolEnd("a", true);
+    expect(terminal.text()).toContain("read_file README.md · 已完成 0 项");
+    view.toolEnd("a", true, "secret-success-output");
+    view.toolStart("b", "run_command", "pnpm test");
+    view.toolEnd("b", true, "successful-test-output");
+    view.beginAnswer();
+    view.appendAnswer("done");
+    view.endAnswer();
     await settle();
-    expect(terminal.text()).toContain("✓ read_file README.md");
+    expect(terminal.text()).toContain("✓ 2 次工具调用");
+    expect(terminal.text()).not.toContain("secret-success-output");
+    expect(terminal.text()).not.toContain("successful-test-output");
     view.close();
   });
 
-  it("matches interleaved completions by id and ignores unknown or repeated ends", async () => {
+  it("always shows failed tools and their first and last eight detail lines", async () => {
     const { terminal, view } = setup();
-
+    const lines = Array.from({ length: 12 }, (_, i) => `failure-row-${i + 1}`);
+    lines[0] = "$ pnpm test";
     view.toolStart("a", "read_file", "README.md");
     view.toolStart("b", "run_command", "pnpm test");
-    view.toolEnd("b", false);
+    view.toolEnd("b", false, lines.join("\r\n") + "\r\n");
     view.toolEnd("a", true);
     view.toolEnd("a", false);
     view.toolEnd("unknown", true);
+    view.beginAnswer();
     await settle();
+    expect(terminal.text()).toContain("✗ 2 次工具调用，其中 1 次失败");
+    expect(terminal.text()).toContain("  ✗ run_command pnpm test");
+    expect(terminal.text()).toContain("    $ pnpm test");
+    expect(terminal.text()).toContain("… 省略 3 行");
+    expect(terminal.text()).not.toContain("failure-row-2");
+    for (const line of lines.slice(-8)) expect(terminal.text()).toContain(line);
+    view.close();
+  });
 
-    expect(terminal.text()).toContain("✓ read_file README.md");
-    expect(terminal.text()).toContain("✗ run_command pnpm test");
-    expect(terminal.text()).not.toContain("⋯");
+  it("starts a new group after an answer and stops every loader on boundaries and close", async () => {
+    const stop = vi.spyOn(Loader.prototype, "stop");
+    const { terminal, view } = setup();
+    try {
+      view.toolStart("a", "read_file", "a.ts");
+      const calls = stop.mock.calls.length;
+      view.toolEnd("a", true);
+      view.beginAnswer();
+      expect(stop.mock.calls.length).toBe(calls + 1);
+      view.appendAnswer("first-answer");
+      view.endAnswer();
+      view.toolStart("b", "read_file", "b.ts");
+      view.toolEnd("b", true);
+      const beforeClose = stop.mock.calls.length;
+      view.close();
+      view.close();
+      expect(stop.mock.calls.length).toBe(beforeClose + 1);
+      expect(terminal.text().match(/✓ 1 次工具调用/g)).toHaveLength(2);
+    } finally {
+      view.close();
+      stop.mockRestore();
+    }
+  });
+
+  it("marks the current group aborted when Ctrl+C interrupts a task", async () => {
+    const { terminal, view } = setup();
+    let interrupts = 0;
+    view.onInterrupt(() => { interrupts += 1; });
+    view.toolStart("a", "run_command", "long task");
+    terminal.type("\x03");
+    view.toolEnd("a", false, "aborted");
+    await settle();
+    expect(interrupts).toBe(1);
+    expect(terminal.text()).toContain("■ 已中止 · 已完成 1 项");
     view.close();
   });
 

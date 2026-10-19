@@ -16,6 +16,8 @@ import type {
   AgentView,
 } from "./agent-view.js";
 
+import { ToolActivityGroup } from "./tool-group.js";
+
 
 // 颜色只用最基本的几种 ANSI 样式：所有终端都支持，也不依赖亮色 / 暗色主题
 const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
@@ -97,7 +99,18 @@ export function createTuiView(
   let answerText = "";
   let stopped = false;
   let debug = false;
-  const runningTools = new Map<string, { line: Text; label: string }>();
+  let group: ToolActivityGroup | undefined;
+  const runningTools = new Map<string, ToolActivityGroup>();
+
+  function finishGroup(aborted = false): void {
+    group?.finish(aborted);
+    group = undefined;
+  }
+
+  function interrupt(): void {
+    finishGroup(true);
+    interruptHandler?.();
+  }
 
   function show(text: string): void {
     history.addChild(new Text(text, 0, 0));
@@ -126,7 +139,7 @@ export function createTuiView(
 
       if (matchesKey(data, "ctrl+c")) {
         // 和普通终端一样：中止当前任务，这次命令当作拒绝
-        interruptHandler?.();
+        interrupt();
       }
 
       const yes = data.toLowerCase() === "y";
@@ -143,7 +156,7 @@ export function createTuiView(
         editor.disableSubmit = true;
         resolveLine(null);
       } else {
-        interruptHandler?.();
+        interrupt();
       }
 
       return { consume: true };
@@ -195,6 +208,7 @@ export function createTuiView(
     },
 
     readLine(prompt) {
+      finishGroup();
       // 提示符本身（比如 "\n> "）不用显示：输入框就在下面
       const label = prompt.trim();
 
@@ -210,6 +224,7 @@ export function createTuiView(
     },
 
     confirm(question) {
+      finishGroup();
       show(yellow(`${question.trim()} [y/N]`));
 
       return new Promise((resolvePromise) => {
@@ -218,6 +233,7 @@ export function createTuiView(
     },
 
     beginAnswer() {
+      finishGroup();
       answerText = "";
       answer = new Markdown("", 0, 1, markdownTheme);
       history.addChild(answer);
@@ -236,15 +252,15 @@ export function createTuiView(
     },
 
     toolStart(id, name, summary) {
-      const label = summary ? `${name} ${dim(summary)}` : name;
-      const line = new Text(`${dim("⋯")} ${label}`, 0, 0);
-
-      runningTools.set(id, { line, label });
-      history.addChild(line);
-      tui.requestRender();
+      if (!group) {
+        group = new ToolActivityGroup(tui);
+        history.addChild(group);
+      }
+      runningTools.set(id, group);
+      group.start(id, name, summary);
     },
 
-    toolEnd(id, ok) {
+    toolEnd(id, ok, detail) {
       const tool = runningTools.get(id);
 
       if (!tool) {
@@ -252,8 +268,7 @@ export function createTuiView(
       }
 
       runningTools.delete(id);
-      tool.line.setText(`${ok ? cyan("✓") : yellow("✗")} ${tool.label}`);
-      tui.requestRender();
+      tool.end(id, ok, detail);
     },
 
     onInterrupt(handler) {
@@ -266,6 +281,7 @@ export function createTuiView(
       }
 
       stopped = true;
+      finishGroup();
       tui.removeChild(editor);
       tui.removeChild(statusLine);
       tui.removeChild(hint);
