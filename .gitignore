@@ -10,3 +10,4 @@ SOURCE_SNAPSHOT_*.md
 HANDOFF_*.md
 .agent-harness/
 .vscode/
+.vs/
