@@ -84,8 +84,8 @@ import {
 } from "./prompts/coding-system-prompt.js";
 
 import {
-  loadSkillCatalog,
-} from "./skills/skill-catalog.js";
+  loadEnabledSkills,
+} from "./skills/skill-selection.js";
 
 import {
   createTaskTool,
@@ -191,6 +191,7 @@ const HELP = `用法：
                           codex：通过 codex sandbox 执行（只支持 Windows，需要 AGENT_CODEX_EXE）
                           mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
       --tui               全屏交互界面（实验性；默认是普通的逐行输出）
+      --no-skills         不扫描或注入工作区 skills
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
@@ -228,6 +229,7 @@ function parseCliArgs() {
       "context-window": { type: "string" },
       sandbox: { type: "string" },
       tui: { type: "boolean" },
+      "no-skills": { type: "boolean" },
     },
   });
 }
@@ -983,7 +985,7 @@ const taskTool = createTaskTool({
 });
 
 // 启动时扫描一次；改了 skill 要重启才生效
-const skillCatalog = await loadSkillCatalog(workspaceRoot);
+const skillCatalog = await loadEnabledSkills(workspaceRoot, values["no-skills"]);
 
 for (const warning of skillCatalog.warnings) {
   view.warn(`⚠ ${warning}`);
