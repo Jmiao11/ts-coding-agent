@@ -140,17 +140,19 @@ describe("tui view", () => {
     expect(terminal.stopped).toBe(true);
   });
 
-  it("collapses tool output to its last eight lines with an omitted-line count", async () => {
+  it("keeps the command and last eight lines while collapsing the middle", async () => {
     const { terminal, view } = setup();
     const lines = Array.from({ length: 12 }, (_, index) => `tool-row-${index + 1}`);
+    lines[0] = "$ pnpm test";
 
     view.toolOutput("run_command", `${lines.join("\r\n")}\r\n`);
     await settle();
 
     const text = terminal.text();
     expect(text).toContain("----- run_command output -----");
-    expect(text).toContain("… 省略 4 行");
-    expect(text).not.toMatch(/tool-row-[1-4](?:\D|$)/);
+    expect(text).toContain("$ pnpm test");
+    expect(text).toContain("… 省略 3 行");
+    expect(text).not.toMatch(/tool-row-[2-4](?:\D|$)/);
 
     for (const line of lines.slice(-8)) {
       expect(text).toContain(line);
@@ -159,9 +161,9 @@ describe("tui view", () => {
     view.close();
   });
 
-  it("shows all eight lines without an omission marker at the boundary", async () => {
+  it.each([0, 1, 8, 9])("shows all %i lines without an omission marker", async (length) => {
     const { terminal, view } = setup();
-    const lines = Array.from({ length: 8 }, (_, index) => `short-row-${index + 1}`);
+    const lines = Array.from({ length }, (_, index) => `short-row-${index + 1}`);
 
     view.toolOutput("run_command", `${lines.join("\n")}\n`);
     await settle();

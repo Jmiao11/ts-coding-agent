@@ -188,11 +188,12 @@ export function createTuiView(
         lines.pop();
       }
 
-      const omitted = Math.max(0, lines.length - 8);
+      const omitted = Math.max(0, lines.length - 9);
       show([
         `----- ${title} output -----`,
-        ...(omitted > 0 ? [dim(`… 省略 ${omitted} 行`)] : []),
-        ...lines.slice(-8),
+        ...(omitted > 0
+          ? [lines[0], dim(`… 省略 ${omitted} 行`), ...lines.slice(-8)]
+          : lines),
       ].join("\n"));
     },
 
