@@ -40,6 +40,17 @@ function fakeTerminal(interactive = true) {
 
 
 describe("plain view", () => {
+  it("does not write status updates or repeated closes to either output stream", () => {
+    const { view, written, errors } = fakeTerminal();
+
+    view.status("model · sandbox: host · in: 10 / out: 2");
+    view.close();
+    view.close();
+
+    expect(written()).toBe("");
+    expect(errors()).toBe("");
+  });
+
   it.each(["", "第一行\n第二行", "第一行\r\n第二行\r\n"])("keeps the existing tool-output format for %j", (text) => {
     const { view, written, errors } = fakeTerminal();
 

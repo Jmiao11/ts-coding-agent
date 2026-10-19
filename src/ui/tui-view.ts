@@ -5,6 +5,7 @@ import {
   matchesKey,
   ProcessTerminal,
   Text,
+  TruncatedText,
   TuiMainScreen,
   type EditorTheme,
   type MarkdownTheme,
@@ -76,9 +77,11 @@ export function createTuiView(
 
   // addChild 只会追加到末尾：先放历史记录，再放输入框，输入框就一直在最下面
   const history = new Container();
+  const statusLine = new Container();
   const editor = new Editor(tui, editorTheme);
 
   tui.addChild(history);
+  tui.addChild(statusLine);
   tui.addChild(editor);
   tui.setFocus(editor);
 
@@ -179,6 +182,12 @@ export function createTuiView(
       ].join("\n"));
     },
 
+    status(text) {
+      statusLine.clear();
+      statusLine.addChild(new TruncatedText(dim(text), 0, 0));
+      tui.requestRender();
+    },
+
     warn(text) {
       show(yellow(text));
     },
@@ -234,6 +243,8 @@ export function createTuiView(
       }
 
       stopped = true;
+      tui.removeChild(editor);
+      tui.removeChild(statusLine);
       // 先把还没画出来的内容画完，否则最后几行（统计、提示）会丢
       tui.renderNow();
       tui.stop();

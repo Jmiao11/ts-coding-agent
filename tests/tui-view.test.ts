@@ -70,6 +70,41 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("renders a replaceable status line above the editor", async () => {
+    const { terminal, view } = setup();
+
+    view.status("model · sandbox: host");
+    await settle();
+
+    const text = terminal.text();
+    expect(text).toContain("model · sandbox: host");
+    expect(text.indexOf("model · sandbox: host")).toBeLessThan(text.indexOf("─"));
+
+    const offset = terminal.written.length;
+    view.status("model · sandbox: host · in: 10 / out: 2");
+    await settle();
+    expect(terminal.written.slice(offset)).toContain("in: 10 / out: 2");
+    view.close();
+  });
+
+  it("flushes final history without the editor borders or status line on close", async () => {
+    const { terminal, view } = setup();
+    view.status("status-to-remove");
+    await settle();
+    expect(terminal.text()).toContain("─");
+
+    const offset = terminal.written.length;
+    view.info("final-history-line");
+    view.close();
+    view.close();
+
+    const closingOutput = terminal.written.slice(offset);
+    expect(closingOutput).toContain("final-history-line");
+    expect(closingOutput).not.toContain("─");
+    expect(closingOutput).not.toContain("status-to-remove");
+    expect(terminal.stopped).toBe(true);
+  });
+
   it("collapses tool output to its last eight lines with an omitted-line count", async () => {
     const { terminal, view } = setup();
     const lines = Array.from({ length: 12 }, (_, index) => `tool-row-${index + 1}`);

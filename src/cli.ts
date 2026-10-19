@@ -1146,6 +1146,11 @@ async function runTask(
 
   addStats(total, current);
   taskCount += 1;
+  view.status(
+    `${modelId} · sandbox: ${sandbox}`
+    + ` · in: ${total.input + total.compactionInput + total.subtaskInput}`
+    + ` / out: ${total.output + total.compactionOutput + total.subtaskOutput}`,
+  );
 }
 
 // ---------- 交互模式命令 ----------
@@ -1554,6 +1559,7 @@ async function runRepl(): Promise<void> {
 }
 
 
+view.status(`${modelId} · sandbox: ${sandbox}`);
 view.info(format("workspace:", workspaceRoot));
 view.info(format("model:", modelId));
 view.info(format("thinking:", thinking ?? "(provider default)"));

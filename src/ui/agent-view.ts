@@ -13,6 +13,9 @@ export type AgentView = {
   /** 工具输出；界面决定是否折叠长内容 */
   toolOutput(title: string, text: string): void;
 
+  /** 当前模型、沙箱和累计用量等状态；普通终端不显示 */
+  status(text: string): void;
+
   /** 警告和错误 */
   warn(text: string): void;
 
