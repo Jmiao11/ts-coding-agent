@@ -31,3 +31,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## anthropics/skills（mcp-builder、frontend-design）
+
+- 来源：https://github.com/anthropics/skills ，commit dbd4588f9e1033efb41dad4bef2f7947c8993d44
+- 位置：.agent/skills/mcp-builder/、.agent/skills/frontend-design/（未修改）
+- 许可证：Apache License 2.0，全文见各目录下的 LICENSE.txt
