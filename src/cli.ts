@@ -154,6 +154,10 @@ import {
   streamAnswers,
 } from "./ui/answer-stream.js";
 
+import {
+  showToolActivity,
+} from "./ui/tool-activity.js";
+
 import type {
   AgentMessage,
 } from "./agent/types.js";
@@ -1014,6 +1018,9 @@ const agent = new Agent({
 
 // 模型回答边生成边显示（之前要等整条消息结束才一次性打印）
 agent.subscribe(streamAnswers(view));
+
+// 工具执行状态使用结构化事件，不解析日志文字。
+agent.subscribe(showToolActivity(view));
 
 agent.subscribe((event) => {
   // 只写完整消息；流式中的 partial 不写

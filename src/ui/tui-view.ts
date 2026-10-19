@@ -94,6 +94,7 @@ export function createTuiView(
   let answer: Markdown | undefined;
   let answerText = "";
   let stopped = false;
+  const runningTools = new Map<string, { line: Text; label: string }>();
 
   function show(text: string): void {
     history.addChild(new Text(text, 0, 0));
@@ -230,6 +231,27 @@ export function createTuiView(
 
     endAnswer() {
       answer = undefined;
+      tui.requestRender();
+    },
+
+    toolStart(id, name, summary) {
+      const label = summary ? `${name} ${dim(summary)}` : name;
+      const line = new Text(`${dim("⋯")} ${label}`, 0, 0);
+
+      runningTools.set(id, { line, label });
+      history.addChild(line);
+      tui.requestRender();
+    },
+
+    toolEnd(id, ok) {
+      const tool = runningTools.get(id);
+
+      if (!tool) {
+        return;
+      }
+
+      runningTools.delete(id);
+      tool.line.setText(`${ok ? cyan("✓") : yellow("✗")} ${tool.label}`);
       tui.requestRender();
     },
 

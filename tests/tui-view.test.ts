@@ -70,6 +70,36 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("shows a tool as running, then marks it done in place", async () => {
+    const { terminal, view } = setup();
+
+    view.toolStart("a", "read_file", "README.md");
+    await settle();
+    expect(terminal.text()).toContain("⋯ read_file README.md");
+
+    view.toolEnd("a", true);
+    await settle();
+    expect(terminal.text()).toContain("✓ read_file README.md");
+    view.close();
+  });
+
+  it("matches interleaved completions by id and ignores unknown or repeated ends", async () => {
+    const { terminal, view } = setup();
+
+    view.toolStart("a", "read_file", "README.md");
+    view.toolStart("b", "run_command", "pnpm test");
+    view.toolEnd("b", false);
+    view.toolEnd("a", true);
+    view.toolEnd("a", false);
+    view.toolEnd("unknown", true);
+    await settle();
+
+    expect(terminal.text()).toContain("✓ read_file README.md");
+    expect(terminal.text()).toContain("✗ run_command pnpm test");
+    expect(terminal.text()).not.toContain("⋯");
+    view.close();
+  });
+
   it("renders a replaceable status line above the editor", async () => {
     const { terminal, view } = setup();
 

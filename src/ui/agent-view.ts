@@ -42,4 +42,10 @@ export type AgentView = {
 
   /** 界面用完了：普通终端什么都不用做；TUI 要把终端恢复原样。可以重复调用 */
   close(): void;
+
+  /** 一个工具开始执行；id 用来匹配结束事件，summary 可能为空 */
+  toolStart(id: string, name: string, summary: string): void;
+
+  /** 这个工具执行结束 */
+  toolEnd(id: string, ok: boolean): void;
 };

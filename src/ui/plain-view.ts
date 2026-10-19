@@ -129,6 +129,10 @@ export function createPlainView(
       signals.on("SIGINT", handler);
     },
 
+    // 日志扩展已经输出工具开始与结束，普通终端不重复显示。
+    toolStart() {},
+    toolEnd() {},
+
     close() {},
   };
 }
