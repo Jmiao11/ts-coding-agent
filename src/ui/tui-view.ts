@@ -115,6 +115,7 @@ export function createTuiView(
 
   let pendingLine: ((line: string | null) => void) | undefined;
   let pendingConfirm: ((answer: boolean) => void) | undefined;
+  let recordApproval: ((answer: boolean) => void) | undefined;
   let interruptHandler: (() => void) | undefined;
   let answer: Markdown | undefined;
   let answerText = "";
@@ -123,6 +124,15 @@ export function createTuiView(
   let group: ToolActivityGroup | undefined;
   let latestGroup: ToolActivityGroup | undefined;
   const runningTools = new Map<string, ToolActivityGroup>();
+
+  function ensureGroup(): ToolActivityGroup {
+    if (!group) {
+      group = new ToolActivityGroup(tui);
+      latestGroup = group;
+      history.addChild(group);
+    }
+    return group;
+  }
 
   function finishGroup(aborted = false): void {
     group?.finish(aborted);
@@ -164,14 +174,19 @@ export function createTuiView(
     if (pendingConfirm) {
       const resolveConfirm = pendingConfirm;
       pendingConfirm = undefined;
+      const yes = data.toLowerCase() === "y";
+      if (recordApproval) {
+        recordApproval(yes);
+        recordApproval = undefined;
+      } else {
+        show(dim(yes ? "  → 允许" : "  → 拒绝"));
+      }
 
       if (matchesKey(data, "ctrl+c")) {
         // 和普通终端一样：中止当前任务，这次命令当作拒绝
         interrupt();
       }
 
-      const yes = data.toLowerCase() === "y";
-      show(dim(yes ? "  → 允许" : "  → 拒绝"));
       resolveConfirm(yes);
       return { consume: true };
     }
@@ -261,9 +276,12 @@ export function createTuiView(
       });
     },
 
-    confirm(question) {
-      finishGroup();
-      show(`\n${yellow(`${question.trim()} [y/N]`)}`);
+    confirm(question, command) {
+      if (command !== undefined) {
+        recordApproval = ensureGroup().requestApproval(question, command);
+      } else {
+        show(`\n${yellow(`${question.trim()} [y/N]`)}`);
+      }
 
       return new Promise((resolvePromise) => {
         pendingConfirm = resolvePromise;
@@ -295,13 +313,9 @@ export function createTuiView(
     },
 
     toolStart(id, name, summary) {
-      if (!group) {
-        group = new ToolActivityGroup(tui);
-        latestGroup = group;
-        history.addChild(group);
-      }
-      runningTools.set(id, group);
-      group.start(id, name, summary);
+      const current = ensureGroup();
+      runningTools.set(id, current);
+      current.start(id, name, summary);
     },
 
     toolEnd(id, ok, detail) {

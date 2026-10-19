@@ -189,7 +189,7 @@ describe("tui view", () => {
     view.toolStart("b", "read_file", "new.ts");
     view.toolEnd("b", true, "new-detail");
     let answered = false;
-    const confirmation = view.confirm("允许吗？").then((value) => { answered = true; return value; });
+    const confirmation = view.confirm("允许吗？", "echo approved").then((value) => { answered = true; return value; });
     terminal.type("\x0f");
     await settle();
     expect(answered).toBe(false);
@@ -197,11 +197,47 @@ describe("tui view", () => {
     expect(terminal.text()).not.toContain("old-detail");
     terminal.type("y");
     expect(await confirmation).toBe(true);
-    view.toolStart("c", "read_file", "after-approval.ts");
-    view.toolEnd("c", true);
-    terminal.type("\x0f");
     view.close();
-    expect(terminal.text()).toContain("after-approval");
+  });
+
+  it("keeps two approvals in one group and retains both records when collapsed", async () => {
+    const { terminal, view } = setup();
+    view.userMessage("two approvals");
+    const first = view.confirm("⚠ Agent 想执行：echo one\n允许吗？", "echo one");
+    await settle();
+    expect(terminal.text()).toContain("等待审批 · 已完成 0 项");
+    expect(terminal.text()).toContain("⚠ Agent 想执行：echo one");
+    terminal.type("y");
+    expect(await first).toBe(true);
+    view.toolStart("a", "run_command", "echo one");
+    view.toolEnd("a", true, "hidden-success-detail");
+    const second = view.confirm("⚠ Agent 想执行：echo two\n允许吗？", "echo two");
+    terminal.type("n");
+    expect(await second).toBe(false);
+    const offset = terminal.written.length;
+    view.beginAnswer();
+    view.appendAnswer("done");
+    view.endAnswer();
+    view.close();
+    const final = terminal.written.slice(offset);
+    expect(final.match(/✓ 1 次工具调用/g)).toHaveLength(1);
+    expect(final).toContain("  ↳ 你允许了：echo one");
+    expect(final).toContain("  ↳ 你拒绝了：echo two");
+    expect(final).not.toContain("[y/N]");
+    expect(final).not.toContain("hidden-success-detail");
+  });
+
+  it("records refusal and stops the group loader on Ctrl+C during approval", async () => {
+    const { terminal, view } = setup();
+    let interrupts = 0;
+    view.onInterrupt(() => { interrupts += 1; });
+    const answer = view.confirm("允许吗？", "echo cancelled");
+    terminal.type("\x03");
+    expect(await answer).toBe(false);
+    expect(interrupts).toBe(1);
+    view.close();
+    expect(terminal.text()).toContain("■ 已中止 · 已完成 0 项");
+    expect(terminal.text()).toContain("↳ 你拒绝了：echo cancelled");
   });
 
   it("groups successful tools and hides their details", async () => {

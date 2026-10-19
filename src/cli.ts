@@ -1009,7 +1009,7 @@ const agent = new Agent({
       budget,
       createCommandApprovalExtension({
         approve: (command) =>
-          view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`),
+          view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`, command),
       }),
       createLoggerExtension((line) => view.log(line)),
     ],
