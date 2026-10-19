@@ -1036,7 +1036,7 @@ const agent = new Agent({
     messages: restored?.messages ?? [],
 
     systemPrompt:
-      createCodingSystemPrompt(workspaceRoot),
+      createCodingSystemPrompt(workspaceRoot, { sandbox }),
 
     tools: [
       createListDirectoryTool(workspaceRoot),
