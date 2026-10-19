@@ -51,6 +51,63 @@ export type MxcSandbox = {
 };
 
 
+export function findForeignOwners(
+  entries: { name: string; owner: string }[],
+  currentUser: string,
+): string[] {
+  return entries
+    .filter((entry) => entry.owner.toLowerCase() !== currentUser.toLowerCase())
+    .map((entry) => entry.name);
+}
+
+
+function workspaceOwnerWarnings(workspaceRoot: string): string[] {
+  try {
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", [
+        "$ErrorActionPreference = 'Stop'",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+        "$entries = @(Get-ChildItem -LiteralPath $env:TSA_MXC_WORKSPACE -Force | Where-Object { $_.Name -notin @('.git', 'node_modules') } | ForEach-Object { @{ name = $_.Name; owner = (Get-Acl -LiteralPath $_.FullName).Owner } })",
+        "@{ currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name; entries = $entries } | ConvertTo-Json -Depth 3 -Compress",
+      ].join("; ")],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        env: { ...process.env, TSA_MXC_WORKSPACE: workspaceRoot },
+      },
+    );
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (result.status !== 0) {
+      throw new Error(result.stderr.trim() || `PowerShell 退出码 ${result.status}`);
+    }
+
+    const { entries, currentUser } = JSON.parse(result.stdout) as {
+      entries: { name: string; owner: string }[];
+      currentUser: string;
+    };
+    const names = findForeignOwners(entries, currentUser);
+
+    if (names.length === 0) {
+      return [];
+    }
+
+    const owners = [...new Set(entries.filter((entry) => names.includes(entry.name)).map((entry) => entry.owner))];
+
+    return [
+      `这些目录或文件的所有者是 ${owners.join(", ")}，MXC 沙箱里的命令可能读不到它们：${names.join(", ")}。`
+      + "修复方法：先关闭 PyCharm 和 Codex 桌面版，然后以当前用户把这些条目复制一份再替换掉原条目（见 README 的 Sandboxes 一节）。",
+    ];
+  } catch (error) {
+    return [`无法检查工作区顶层条目的所有者：${error instanceof Error ? error.message : String(error)}`];
+  }
+}
+
+
 export async function setupMxcSandbox(
   workspaceRoot: string,
 ): Promise<MxcSandbox> {
@@ -126,7 +183,7 @@ export async function setupMxcSandbox(
     return {
       executor,
       label: `mxc（实验性，${support.isolationTier ?? "未知隔离等级"}，工作区映射为 ${mapping.drive}）`,
-      warnings: support.isolationWarnings ?? [],
+      warnings: [...(support.isolationWarnings ?? []), ...workspaceOwnerWarnings(workspaceRoot)],
     };
   } catch (error) {
     mapping.release();
