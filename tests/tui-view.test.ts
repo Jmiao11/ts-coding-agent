@@ -95,7 +95,7 @@ describe("tui view", () => {
     expect(terminal.text()).not.toContain("hidden skill instructions");
   });
 
-  it.each([100, 120, 138, 180])("fits the complete Chinese shortcut hint into exactly %i terminal columns", async (width) => {
+  it.each([100, 120, 133, 138, 180])("fits the complete Chinese shortcut hint into exactly %i terminal columns", async (width) => {
     const { terminal, view } = setup();
     terminal.width = width;
     view.status("中文工作区 · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
@@ -108,9 +108,9 @@ describe("tui view", () => {
     view.close();
   });
 
-  it("keeps the hint before the right margin after resizing through 100, 138 and 180 columns", async () => {
+  it("keeps the hint before the right margin after resizing through 100, 133, 138 and 180 columns", async () => {
     const { terminal, view } = setup();
-    for (const width of [100, 138, 180]) {
+    for (const width of [100, 133, 138, 180]) {
       terminal.width = width;
       const offset = terminal.written.length;
       view.status("中文工作区 · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
