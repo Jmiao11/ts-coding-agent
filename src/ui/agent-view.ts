@@ -10,6 +10,15 @@ export type AgentView = {
   /** 警告和错误 */
   warn(text: string): void;
 
+  /** 一条模型回答开始了（第一段文字到达时） */
+  beginAnswer(): void;
+
+  /** 回答的下一段文字（流式输出的增量） */
+  appendAnswer(delta: string): void;
+
+  /** 这条回答结束了 */
+  endAnswer(): void;
+
   /** 读一行输入。Ctrl+C 或输入关闭（Ctrl+D）时返回 null，由调用方决定怎么处理 */
   readLine(prompt: string): Promise<string | null>;
 

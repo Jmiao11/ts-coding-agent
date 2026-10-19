@@ -146,6 +146,10 @@ import {
   createPlainView,
 } from "./ui/plain-view.js";
 
+import {
+  streamAnswers,
+} from "./ui/answer-stream.js";
+
 import type {
   AgentMessage,
 } from "./agent/types.js";
@@ -1000,6 +1004,9 @@ const agent = new Agent({
 });
 
 
+// 模型回答边生成边显示（之前要等整条消息结束才一次性打印）
+agent.subscribe(streamAnswers(view));
+
 agent.subscribe((event) => {
   // 只写完整消息；流式中的 partial 不写
   if (event.type === "message_end") {
@@ -1082,18 +1089,6 @@ agent.subscribe((event) => {
 
     if (thinkingChars > 0) {
       view.info(`[thinking] ${thinkingChars} 字符`);
-    }
-
-    const text = event.message.content
-      .filter(
-        (item): item is TextContent =>
-          item.type === "text",
-      )
-      .map((item) => item.text)
-      .join("");
-
-    if (text.length > 0) {
-      view.info(`\n[assistant] ${text}\n`);
     }
   }
 });

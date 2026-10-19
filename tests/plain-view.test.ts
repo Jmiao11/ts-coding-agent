@@ -77,4 +77,15 @@ describe("plain view", () => {
     input.end();
     expect(await closed).toBeNull();
   });
+
+  it("streams an answer in the same format as the complete answer", () => {
+    const { view, written } = fakeTerminal();
+
+    view.beginAnswer();
+    view.appendAnswer("你");
+    view.appendAnswer("好");
+    view.endAnswer();
+
+    expect(written()).toBe("\n[assistant] 你好\n\n");
+  });
 });

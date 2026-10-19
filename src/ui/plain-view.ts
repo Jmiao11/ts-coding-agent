@@ -81,6 +81,18 @@ export function createPlainView(
       errorOutput.write(`${text}\n`);
     },
 
+    beginAnswer() {
+      output.write("\n[assistant] ");
+    },
+
+    appendAnswer(delta) {
+      output.write(delta);
+    },
+
+    endAnswer() {
+      output.write("\n\n");
+    },
+
     readLine(prompt) {
       return ask(prompt, () => {});
     },
