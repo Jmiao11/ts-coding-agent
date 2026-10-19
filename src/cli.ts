@@ -20,6 +20,7 @@ import {
 } from "node:path";
 
 import {
+  format,
   parseArgs,
 } from "node:util";
 
@@ -473,28 +474,28 @@ async function pickSession(
 ): Promise<string | undefined> {
   const shown = sessions.slice(0, MAX_LISTED_SESSIONS);
 
-  console.log(
+  view.info(
     `\n${workspaceRoot} 的会话（最近活动的在前）：\n`,
   );
 
   shown.forEach((session, index) => {
-    console.log(
+    view.info(
       `[${index + 1}] ${formatTime(session.modified)}  ${session.id.slice(0, 8)}  ${session.messageCount} 条消息${session.compacted ? "，已压缩" : ""}`,
     );
 
-    console.log(
+    view.info(
       `    首条：${oneLine(session.firstUserText)}`,
     );
 
     if (session.lastUserText !== session.firstUserText) {
-      console.log(
+      view.info(
         `    最后：${oneLine(session.lastUserText)}`,
       );
     }
   });
 
   if (sessions.length > shown.length) {
-    console.log(
+    view.info(
       `\n（还有 ${sessions.length - shown.length} 个更早的会话没有列出，可以按 id 前缀指定：/resume <id> 或 --session <id>）`,
     );
   }
@@ -543,7 +544,7 @@ function resumeSessionFile(
   const loaded = loadSession(path);
 
   if (loaded.skippedLines > 0) {
-    console.warn(
+    view.warn(
       `⚠ 会话文件里有 ${loaded.skippedLines} 行无法解析，已跳过（通常是进程被强制结束时写到一半的记录）：${path}`,
     );
   }
@@ -595,7 +596,7 @@ async function chooseSessionPath(): Promise<string | undefined> {
     const picked = await pickSession(sessions);
 
     if (!picked) {
-      console.log("已取消。");
+      view.info("已取消。");
       process.exit(0);
     }
 
@@ -623,7 +624,7 @@ async function openSession(): Promise<{
   }
 
   if (values.continue) {
-    console.warn("这个 workspace 还没有会话记录，开始新会话。\n");
+    view.warn("这个 workspace 还没有会话记录，开始新会话。\n");
   }
 
   return {
@@ -654,7 +655,7 @@ function handleInterrupt(): void {
 
   interrupted = true;
 
-  console.error(
+  view.warn(
     "\n[中止] 正在停止当前任务和正在运行的命令（再按一次 Ctrl+C 强制退出）",
   );
 
@@ -728,27 +729,27 @@ function printTokens(
   scope: string,
 ): void {
   if (stats.input > 0) {
-    console.log(`Token 用量（主任务${scope}）：`, {
+    view.info(format(`Token 用量（主任务${scope}）：`, {
       input: stats.input,
       cachedInput: stats.cached,
       output: stats.output,
       peakInput: stats.peakInput,
-    });
+    }));
   }
 
   if (stats.compactions > 0) {
-    console.log(`Token 用量（压缩${scope}）：`, {
+    view.info(format(`Token 用量（压缩${scope}）：`, {
       calls: stats.compactions,
       input: stats.compactionInput,
       output: stats.compactionOutput,
-    });
+    }));
   }
   if (stats.subtasks > 0) {
-    console.log(`Token 用量（子任务${scope}）：`, {
+    view.info(format(`Token 用量（子任务${scope}）：`, {
       calls: stats.subtasks,
       input: stats.subtaskInput,
       output: stats.subtaskOutput,
-    });
+    }));
   }
 
   if (
@@ -756,7 +757,7 @@ function printTokens(
     || stats.compactions > 0
     || stats.subtasks > 0
   ) {
-    console.log(`Token 合计${scope}：`, {
+    view.info(format(`Token 合计${scope}：`, {
       input:
         stats.input
         + stats.compactionInput
@@ -766,7 +767,7 @@ function printTokens(
         stats.output
         + stats.compactionOutput
         + stats.subtaskOutput,
-    });
+    }));
   }
 }
 
@@ -836,7 +837,7 @@ function createActiveSession(
     initialCheckpoint: checkpoint,
 
     onEstimate(tokens, threshold) {
-      console.log(`[context] est=${tokens} threshold=${threshold}`);
+      view.info(`[context] est=${tokens} threshold=${threshold}`);
     },
 
     onCompaction(event) {
@@ -844,7 +845,7 @@ function createActiveSession(
       current.compactionInput += event.usage?.input ?? 0;
       current.compactionOutput += event.usage?.output ?? 0;
 
-      console.log(
+      view.info(
         [
           `\n[compaction #${total.compactions + current.compactions}]`,
           `est ${event.tokensBefore} → ~${event.estimatedTokensAfter}`,
@@ -862,7 +863,7 @@ function createActiveSession(
         ].join(" "),
       );
 
-      console.log(
+      view.info(
         `----- summary -----\n${event.summary}\n-------------------\n`,
       );
 
@@ -874,14 +875,14 @@ function createActiveSession(
           ...(event.usage ? { usage: event.usage } : {}),
         });
       } catch (error) {
-        console.error(
+        view.warn(
           `[session] 压缩记录写入失败：${error instanceof Error ? error.message : String(error)}`,
         );
       }
     },
 
     onError(error) {
-      console.error(
+      view.warn(
         `\n[compaction failed] ${error instanceof Error ? error.message : String(error)}（本次不压缩，继续运行）\n`,
       );
     },
@@ -917,7 +918,7 @@ const trackWrite: WriteTracker = <T>(
       active.writer.appendFileChange({ taskEntryId, ...change });
     },
     onRecordError: (error) => {
-      console.error(
+      view.warn(
         `[checkpoint] ${target.relativePath} 的修改没有记录下来，无法撤销：${error instanceof Error ? error.message : String(error)}`,
       );
     },
@@ -953,7 +954,7 @@ const taskTool = createTaskTool({
     }),
 
     createLoggerExtension(
-      (line) => console.log(`  [task] ${line}`),
+      (line) => view.info(`  [task] ${line}`),
     ),
   ],
 });
@@ -991,7 +992,7 @@ const agent = new Agent({
         approve: (command) =>
           view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`),
       }),
-      createLoggerExtension(),
+      createLoggerExtension((line) => view.info(line)),
     ],
   },
 
@@ -1027,7 +1028,7 @@ agent.subscribe((event) => {
       current.subtaskInput += details.usage.input;
       current.subtaskOutput += details.usage.output;
 
-      console.log(
+      view.info(
         `  [task] ${event.isError ? "failed" : "done"}: ${details.description}（模型 ${details.modelCalls} 次，工具 ${details.toolCalls} 次，in=${details.usage.input} out=${details.usage.output}）`,
       );
     }
@@ -1044,7 +1045,7 @@ agent.subscribe((event) => {
       ?.map((item) => item.text)
       .join("") ?? "";
 
-    console.log(
+    view.info(
       `\n----- run_command output -----\n${text}\n------------------------------\n`,
     );
   }
@@ -1060,7 +1061,7 @@ agent.subscribe((event) => {
       event.message.stopReason === "error"
       && event.message.errorMessage
     ) {
-      console.error(`\n[model error] ${event.message.errorMessage}\n`);
+      view.warn(`\n[model error] ${event.message.errorMessage}\n`);
     }
 
     const usage = event.message.usage;
@@ -1080,7 +1081,7 @@ agent.subscribe((event) => {
     );
 
     if (thinkingChars > 0) {
-      console.log(`[thinking] ${thinkingChars} 字符`);
+      view.info(`[thinking] ${thinkingChars} 字符`);
     }
 
     const text = event.message.content
@@ -1092,7 +1093,7 @@ agent.subscribe((event) => {
       .join("");
 
     if (text.length > 0) {
-      console.log(`\n[assistant] ${text}\n`);
+      view.info(`\n[assistant] ${text}\n`);
     }
   }
 });
@@ -1113,7 +1114,7 @@ async function runTask(
     : undefined;
 
   if (note) {
-    console.log("（已在这次任务前告诉模型：之前的修改被撤销了）");
+    view.info("（已在这次任务前告诉模型：之前的修改被撤销了）");
   }
 
   try {
@@ -1124,10 +1125,10 @@ async function runTask(
     );
   } catch (error) {
     if (error instanceof BudgetExceededError) {
-      console.error(`\n[stopped] ${error.message}`);
+      view.warn(`\n[stopped] ${error.message}`);
     } else {
       // 意外错误：打印出来；交互模式里还可以接着输入下一个任务
-      console.error(
+      view.warn(
         `\n[error] ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
       );
       process.exitCode = 1;
@@ -1135,11 +1136,11 @@ async function runTask(
   }
 
   if (interrupted) {
-    console.log("\n已中止。");
+    view.info("\n已中止。");
   }
 
-  console.log("\n模型调用次数：", current.modelCalls);
-  console.log("执行过的工具：", current.tools);
+  view.info(format("\n模型调用次数：", current.modelCalls));
+  view.info(format("执行过的工具：", current.tools));
   printTokens(current, "");
 
   addStats(total, current);
@@ -1169,9 +1170,9 @@ function printPreviousSession(
 
   const id = previous.id.slice(0, 8);
 
-  console.log(`上一个会话：${previous.path}`);
+  view.info(`上一个会话：${previous.path}`);
 
-  console.log(
+  view.info(
     `回到它：/resume ${id}（或退出后 ts-coding-agent --session ${id}）`,
   );
 }
@@ -1185,7 +1186,7 @@ function printLastUserMessage(
     .find((message) => message.role === "user");
 
   if (lastUser?.role === "user") {
-    console.log(
+    view.info(
       `上次的最后一条：${oneLine(textOf(lastUser.content))}`,
     );
   }
@@ -1212,7 +1213,7 @@ const replCommands: ReplCommand[] = [
         createSessionWriter(newSessionFile(workspaceRoot)),
       );
 
-      console.log("\n已开始新会话（写入第一条消息时才创建文件）。");
+      view.info("\n已开始新会话（写入第一条消息时才创建文件）。");
 
       printPreviousSession(previous);
 
@@ -1234,7 +1235,7 @@ const replCommands: ReplCommand[] = [
         const match = matchSessionPrefix(sessions, args);
 
         if (typeof match === "string") {
-          console.log(match);
+          view.info(match);
           return "continue";
         }
 
@@ -1245,20 +1246,20 @@ const replCommands: ReplCommand[] = [
         );
 
         if (others.length === 0) {
-          console.log("没有其他会话可以切换。");
+          view.info("没有其他会话可以切换。");
           return "continue";
         }
 
         path = await pickSession(others);
 
         if (!path) {
-          console.log("已取消。");
+          view.info("已取消。");
           return "continue";
         }
       }
 
       if (path === active.writer.path) {
-        console.log("已经在这个会话里了。");
+        view.info("已经在这个会话里了。");
         return "continue";
       }
 
@@ -1268,7 +1269,7 @@ const replCommands: ReplCommand[] = [
       try {
         next = resumeSessionFile(path);
       } catch (error) {
-        console.log(
+        view.info(
           `无法打开会话 ${path}：${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -1289,7 +1290,7 @@ const replCommands: ReplCommand[] = [
         next.restored.checkpoint,
       );
 
-      console.log(
+      view.info(
         `\n已切换到会话：${next.writer.path}（${next.restored.messages.length} 条消息${next.restored.checkpoint ? "，已压缩过" : ""}）`,
       );
 
@@ -1308,7 +1309,7 @@ const replCommands: ReplCommand[] = [
       const messages = agent.state.messages;
 
       if (messages.length === 0) {
-        console.log("当前会话还没有消息，无需压缩。");
+        view.info("当前会话还没有消息，无需压缩。");
         return "continue";
       }
 
@@ -1328,14 +1329,14 @@ const replCommands: ReplCommand[] = [
         });
 
       if (outcome.status === "nothing") {
-        console.log(
+        view.info(
           `没有可以压缩的内容：保留区（最近约 ${compactionSettings.keepRecentTokens} tokens）之外没有消息。`,
         );
       } else if (
         outcome.status === "failed"
         && interrupted
       ) {
-        console.log("已中止。");
+        view.info("已中止。");
       }
 
       // 计入整个进程的 Token 合计，但不增加任务数。
@@ -1357,17 +1358,17 @@ const replCommands: ReplCommand[] = [
         (context.estimatedTokens / context.threshold) * 100,
       );
 
-      console.log(
+      view.info(
         `\n会话文件：${active.writer.path}${existsSync(active.writer.path) ? "" : "（还没有消息，文件尚未创建）"}`,
       );
-      console.log(`会话 id：${active.writer.id}`);
-      console.log(
+      view.info(`会话 id：${active.writer.id}`);
+      view.info(
         `消息：${messages.length} 条${context.compacted ? `，已压缩；发给模型的视图约 ${context.viewMessages} 条` : ""}`,
       );
-      console.log(
+      view.info(
         `上下文：估算约 ${context.estimatedTokens} tokens，压缩阈值 ${context.threshold}（${percent}%）`,
       );
-      console.log(
+      view.info(
         `本次运行：${taskCount} 个任务，input ${total.input + total.compactionInput + total.subtaskInput}，output ${total.output + total.compactionOutput + total.subtaskOutput}`,
       );
 
@@ -1383,13 +1384,13 @@ const replCommands: ReplCommand[] = [
         : undefined;
 
       if (!plan) {
-        console.log("没有可以撤销的修改（只跟踪 write_file / edit_file 的改动）。");
+        view.info("没有可以撤销的修改（只跟踪 write_file / edit_file 的改动）。");
         return "continue";
       }
 
       const conflicts = new Set(await findConflicts(workspaceRoot, plan));
 
-      console.log(`\n将撤销任务「${oneLine(plan.taskText)}」对以下文件的修改：`);
+      view.info(`\n将撤销任务「${oneLine(plan.taskText)}」对以下文件的修改：`);
 
       for (const file of plan.files) {
         const action = file.before === null
@@ -1400,13 +1401,13 @@ const replCommands: ReplCommand[] = [
           ? "  ⚠ 任务之后又被改过，恢复会覆盖这些改动"
           : "";
 
-        console.log(`  ${file.path}  ${action}${warning}`);
+        view.info(`  ${file.path}  ${action}${warning}`);
       }
 
-      console.log("对话记录不会改变；run_command 造成的改动不在其中。");
+      view.info("对话记录不会改变；run_command 造成的改动不在其中。");
 
       if (!(await view.confirm("确认撤销吗？"))) {
-        console.log("已取消。");
+        view.info("已取消。");
         return "continue";
       }
 
@@ -1414,13 +1415,13 @@ const replCommands: ReplCommand[] = [
       const changed = await findNewConflicts(workspaceRoot, plan, conflicts);
 
       if (changed.length > 0) {
-        console.log("确认期间这些文件又被改过，为避免覆盖，这次没有撤销：");
+        view.info("确认期间这些文件又被改过，为避免覆盖，这次没有撤销：");
 
         for (const path of changed) {
-          console.log(`  ${path}`);
+          view.info(`  ${path}`);
         }
 
-        console.log("检查之后可以重新执行 /undo。");
+        view.info("检查之后可以重新执行 /undo。");
         return "continue";
       }
 
@@ -1428,12 +1429,12 @@ const replCommands: ReplCommand[] = [
 
       if (failures.length > 0) {
         for (const failure of failures) {
-          console.log(
+          view.info(
             `  恢复失败：${failure.path}：${failure.error instanceof Error ? failure.error.message : String(failure.error)}`,
           );
         }
 
-        console.log("有文件没有恢复成功，这次不记为已撤销；处理好之后可以再执行一次 /undo。");
+        view.info("有文件没有恢复成功，这次不记为已撤销；处理好之后可以再执行一次 /undo。");
         return "continue";
       }
 
@@ -1442,7 +1443,7 @@ const replCommands: ReplCommand[] = [
         files: plan.files.map((file) => file.path),
       });
 
-      console.log(`已撤销 ${plan.files.length} 个文件。再执行 /undo 会继续撤销更早的任务。`);
+      view.info(`已撤销 ${plan.files.length} 个文件。再执行 /undo 会继续撤销更早的任务。`);
 
       return "continue";
     },
@@ -1478,22 +1479,22 @@ function printReplHelp(): void {
     ...rows.map((row) => row.name.length),
   );
 
-  console.log("\n命令：");
+  view.info("\n命令：");
 
   for (const row of rows) {
-    console.log(
+    view.info(
       `  ${row.name.padEnd(width)}  ${row.description}`,
     );
   }
 
-  console.log(
+  view.info(
     "\n其他非 / 开头的输入都作为任务发给 Agent。空行忽略；任务运行中按 Ctrl+C 只中止当前任务，连按两次强制退出。",
   );
 }
 
 
 async function runRepl(): Promise<void> {
-  console.log(
+  view.info(
     "\n交互模式：输入任务后回车运行；/help 查看命令，/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。",
   );
 
@@ -1523,7 +1524,7 @@ async function runRepl(): Promise<void> {
       const command = findReplCommand(name);
 
       if (!command) {
-        console.log(
+        view.info(
           `未知命令：${name}。输入 /help 查看可用命令。`,
         );
         continue;
@@ -1534,7 +1535,7 @@ async function runRepl(): Promise<void> {
           break;
         }
       } catch (error) {
-        console.error(
+        view.warn(
           `[error] ${name}：${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -1546,30 +1547,30 @@ async function runRepl(): Promise<void> {
   }
 
   if (taskCount > 1) {
-    console.log(`\n本次共 ${taskCount} 个任务：`);
+    view.info(`\n本次共 ${taskCount} 个任务：`);
     printTokens(total, "，全部任务");
   }
 }
 
 
-console.log("workspace:", workspaceRoot);
-console.log("model:", modelId);
-console.log("thinking:", thinking ?? "(provider default)");
-console.log("sandbox:", sandboxLabel);
-console.log(
+view.info(format("workspace:", workspaceRoot));
+view.info(format("model:", modelId));
+view.info(format("thinking:", thinking ?? "(provider default)"));
+view.info(format("sandbox:", sandboxLabel));
+view.info(format(
   "session:",
   restored
     ? `继续 ${active.writer.path}（${restored.messages.length} 条消息${restored.checkpoint ? "，已压缩过" : ""}）`
     : active.writer.path,
-);
-console.log(
+));
+view.info(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
 );
 
 if (interactive) {
   await runRepl();
 } else {
-  console.log("task:", argTask, "\n");
+  view.info(format("task:", argTask, "\n"));
   await runTask(argTask);
 
   if (interrupted) {
@@ -1579,10 +1580,10 @@ if (interactive) {
 
 // 新会话里一个任务都没跑的话，文件还没创建
 if (existsSync(active.writer.path)) {
-  console.log(`\n会话记录：${active.writer.path}`);
-  console.log("继续这个会话：ts-coding-agent -c");
+  view.info(`\n会话记录：${active.writer.path}`);
+  view.info("继续这个会话：ts-coding-agent -c");
 }
 
-console.log(
+view.info(
   "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
 );
