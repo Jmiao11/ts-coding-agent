@@ -849,7 +849,7 @@ function createActiveSession(
     initialCheckpoint: checkpoint,
 
     onEstimate(tokens, threshold) {
-      view.info(`[context] est=${tokens} threshold=${threshold}`);
+      view.log(`[context] est=${tokens} threshold=${threshold}`);
     },
 
     onCompaction(event) {
@@ -966,7 +966,7 @@ const taskTool = createTaskTool({
     }),
 
     createLoggerExtension(
-      (line) => view.info(`  [task] ${line}`),
+      (line) => view.log(`  [task] ${line}`),
     ),
   ],
 });
@@ -1004,7 +1004,7 @@ const agent = new Agent({
         approve: (command) =>
           view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`),
       }),
-      createLoggerExtension((line) => view.info(line)),
+      createLoggerExtension((line) => view.log(line)),
     ],
   },
 
@@ -1043,7 +1043,7 @@ agent.subscribe((event) => {
       current.subtaskInput += details.usage.input;
       current.subtaskOutput += details.usage.output;
 
-      view.info(
+      view.log(
         `  [task] ${event.isError ? "failed" : "done"}: ${details.description}（模型 ${details.modelCalls} 次，工具 ${details.toolCalls} 次，in=${details.usage.input} out=${details.usage.output}）`,
       );
     }
@@ -1096,7 +1096,7 @@ agent.subscribe((event) => {
     );
 
     if (thinkingChars > 0) {
-      view.info(`[thinking] ${thinkingChars} 字符`);
+      view.log(`[thinking] ${thinkingChars} 字符`);
     }
   }
 });

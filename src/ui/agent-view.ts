@@ -4,8 +4,11 @@
  * 和 CommandExecutor 同一个思路：接口固定，实现可替换。
  */
 export type AgentView = {
-  /** 普通信息：启动信息、日志行、统计 */
+  /** 普通信息：启动信息、统计 */
   info(text: string): void;
+
+  /** 诊断日志：模型、工具、上下文等运行细节 */
+  log(text: string): void;
 
   /** 警告和错误 */
   warn(text: string): void;

@@ -160,6 +160,10 @@ export function createTuiView(
       show(text);
     },
 
+    log(text) {
+      show(dim(text));
+    },
+
     warn(text) {
       show(yellow(text));
     },

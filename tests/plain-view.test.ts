@@ -40,6 +40,17 @@ function fakeTerminal(interactive = true) {
 
 
 describe("plain view", () => {
+  it("writes logs exactly like info, including whitespace", () => {
+    const { view, written, errors } = fakeTerminal();
+    const text = "\n[context] est=12 threshold=100\n";
+
+    view.info(text);
+    view.log(text);
+
+    expect(written()).toBe(`${text}\n${text}\n`);
+    expect(errors()).toBe("");
+  });
+
   it("writes info to stdout and warnings to stderr, one line each", () => {
     const { view, written, errors } = fakeTerminal();
 

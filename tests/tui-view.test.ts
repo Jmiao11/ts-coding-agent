@@ -70,6 +70,17 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("renders diagnostic logs in dim text", async () => {
+    const { terminal, view } = setup();
+
+    view.log("[context] est=12 threshold=100");
+    await settle();
+
+    expect(terminal.text()).toContain("[context] est=12 threshold=100");
+    expect(terminal.written).toContain("\x1b[2m");
+    view.close();
+  });
+
   it("renders info lines and a streamed answer into the history above the editor", async () => {
     const { terminal, view } = setup();
 
