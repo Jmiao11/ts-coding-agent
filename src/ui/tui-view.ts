@@ -181,21 +181,8 @@ export function createTuiView(
       debug = enabled;
     },
 
-    toolOutput(title, text) {
-      const lines = text.split(/\r?\n/);
-
-      if (lines.at(-1) === "") {
-        lines.pop();
-      }
-
-      const omitted = Math.max(0, lines.length - 9);
-      show([
-        `----- ${title} output -----`,
-        ...(omitted > 0
-          ? [lines[0], dim(`… 省略 ${omitted} 行`), ...lines.slice(-8)]
-          : lines),
-      ].join("\n"));
-    },
+    // TUI 使用 toolEnd 的结构化 detail，不使用 cli 拼好的文字。
+    toolOutput() {},
 
     status(text) {
       statusLine.clear();

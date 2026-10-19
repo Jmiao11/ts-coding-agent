@@ -140,39 +140,12 @@ describe("tui view", () => {
     expect(terminal.stopped).toBe(true);
   });
 
-  it("keeps the command and last eight lines while collapsing the middle", async () => {
+  it("ignores the CLI-formatted tool output", async () => {
     const { terminal, view } = setup();
-    const lines = Array.from({ length: 12 }, (_, index) => `tool-row-${index + 1}`);
-    lines[0] = "$ pnpm test";
-
-    view.toolOutput("run_command", `${lines.join("\r\n")}\r\n`);
+    view.toolOutput("run_command", "$ pnpm test\nshould-not-be-shown\nExit code: 0");
     await settle();
-
-    const text = terminal.text();
-    expect(text).toContain("----- run_command output -----");
-    expect(text).toContain("$ pnpm test");
-    expect(text).toContain("… 省略 3 行");
-    expect(text).not.toMatch(/tool-row-[2-4](?:\D|$)/);
-
-    for (const line of lines.slice(-8)) {
-      expect(text).toContain(line);
-    }
-
-    view.close();
-  });
-
-  it.each([0, 1, 8, 9])("shows all %i lines without an omission marker", async (length) => {
-    const { terminal, view } = setup();
-    const lines = Array.from({ length }, (_, index) => `short-row-${index + 1}`);
-
-    view.toolOutput("run_command", `${lines.join("\n")}\n`);
-    await settle();
-
-    expect(terminal.text()).not.toContain("省略");
-    for (const line of lines) {
-      expect(terminal.text()).toContain(line);
-    }
-
+    expect(terminal.text()).not.toContain("should-not-be-shown");
+    expect(terminal.text()).not.toContain("run_command output");
     view.close();
   });
 

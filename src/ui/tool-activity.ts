@@ -59,7 +59,21 @@ export function showToolActivity(
     }
 
     if (event.type === "tool_execution_end") {
-      view.toolEnd(event.toolCallId, !event.isError);
+      const result = event.result;
+      const texts = typeof result === "object" && result !== null
+        && "content" in result && Array.isArray(result.content)
+        ? result.content.filter(
+          (item): item is { type: "text"; text: string } =>
+            typeof item === "object" && item !== null
+            && item.type === "text" && typeof item.text === "string",
+        )
+        : [];
+
+      if (texts.length > 0) {
+        view.toolEnd(event.toolCallId, !event.isError, texts.map((item) => item.text).join(""));
+      } else {
+        view.toolEnd(event.toolCallId, !event.isError);
+      }
     }
   };
 }

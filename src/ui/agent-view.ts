@@ -53,5 +53,5 @@ export type AgentView = {
   toolStart(id: string, name: string, summary: string): void;
 
   /** 这个工具执行结束 */
-  toolEnd(id: string, ok: boolean): void;
+  toolEnd(id: string, ok: boolean, detail?: string): void;
 };

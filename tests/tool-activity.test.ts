@@ -46,6 +46,23 @@ describe("describeToolCall", () => {
 
 
 describe("showToolActivity", () => {
+  it.each([
+    [{ content: [{ type: "text", text: "first" }, { type: "image" }, { type: "text", text: "second" }] }, "firstsecond"],
+    [{ content: [{ type: "text", text: "" }] }, ""],
+    [null, undefined],
+    ["not a result", undefined],
+    [{ content: "not an array" }, undefined],
+    [{ content: [null, 42, { type: "text", text: 123 }, { text: "unknown" }] }, undefined],
+  ])("only forwards validated text content from %j", (result, detail) => {
+    const calls: unknown[][] = [];
+    const onEvent = showToolActivity({
+      toolStart() {},
+      toolEnd: (...args) => { calls.push(args); },
+    });
+    onEvent({ type: "tool_execution_end", toolCallId: "a", toolName: "run_command", result, isError: false });
+    expect(calls).toEqual([detail === undefined ? ["a", true] : ["a", true, detail]]);
+  });
+
   it("forwards tool events by call id even when tools finish out of order", () => {
     const calls: string[] = [];
     const onEvent = showToolActivity({
