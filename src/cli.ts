@@ -1522,13 +1522,12 @@ function printReplHelp(): void {
   view.info(
     "\n其他非 / 开头的输入都作为任务发给 Agent。空行忽略；任务运行中按 Ctrl+C 只中止当前任务，连按两次强制退出。",
   );
+  view.keyHelp();
 }
 
 
 async function runRepl(): Promise<void> {
-  view.info(
-    "\n交互模式：输入任务后回车运行；/help 查看命令，/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。",
-  );
+  view.replIntro();
 
   // 继续会话时，先让用户确认接的是哪个会话
   printLastUserMessage(restored?.messages ?? []);
@@ -1586,10 +1585,12 @@ async function runRepl(): Promise<void> {
 
 
 updateStatus();
-view.info(format("workspace:", workspaceRoot));
-view.info(format("model:", modelId));
-view.log(format("thinking:", thinking ?? "(provider default)"));
-view.info(format("sandbox:", sandboxLabel));
+view.header({
+  workspace: workspaceRoot,
+  model: modelId,
+  sandbox: sandboxLabel,
+  thinking: thinking ?? "(provider default)",
+});
 view.log(format(
   "session:",
   restored

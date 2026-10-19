@@ -82,6 +82,6 @@ export class ToolActivityGroup implements Component {
         heading.push(...new Text(dim(shown.map((line) => `    ${line}`).join("\n")), 0, 0).render(width));
       }
     }
-    return heading;
+    return ["", ...heading];
   }
 }

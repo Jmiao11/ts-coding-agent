@@ -5,8 +5,11 @@ import {
   matchesKey,
   ProcessTerminal,
   Text,
-  TruncatedText,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
   TuiMainScreen,
+  type Component,
   type EditorTheme,
   type MarkdownTheme,
   type Terminal,
@@ -25,6 +28,16 @@ const bold = (text: string) => `\x1b[1m${text}\x1b[22m`;
 const yellow = (text: string) => `\x1b[33m${text}\x1b[39m`;
 const cyan = (text: string) => `\x1b[36m${text}\x1b[39m`;
 const plain = (text: string) => text;
+
+class History extends Container {
+  override render(width: number): string[] {
+    const rows = super.render(width);
+    // 相邻块各自留白时，只保留一行分隔。
+    return rows.filter((row, index) => index === 0
+      || stripTerminalSequences(row).trim() !== ""
+      || stripTerminalSequences(rows[index - 1]!).trim() !== "");
+  }
+}
 
 const markdownTheme: MarkdownTheme = {
   heading: bold,
@@ -78,15 +91,23 @@ export function createTuiView(
   tui.setShowHardwareCursor(true);
 
   // addChild 只会追加到末尾：先放历史记录，再放输入框，输入框就一直在最下面
-  const history = new Container();
-  const statusLine = new Container();
+  const history = new History();
   const editor = new Editor(tui, editorTheme);
-  const hint = new Text(dim("Enter 发送 · Ctrl+C 中止 · /help"), 0, 0);
+  let statusText = "";
+  const bottomBar: Component = {
+    invalidate() {},
+    render(width) {
+      const right = "Enter 发送 · Ctrl+O 详情 · /help";
+      const room = width - visibleWidth(right) - 2;
+      if (room <= 0) return [dim(truncateToWidth(right, width))];
+      const left = truncateToWidth(statusText, room);
+      return [dim(left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right)];
+    },
+  };
 
   tui.addChild(history);
-  tui.addChild(statusLine);
   tui.addChild(editor);
-  tui.addChild(hint);
+  tui.addChild(bottomBar);
   tui.setFocus(editor);
 
   // 不在等输入的时候（比如任务运行中）不接受提交，免得输入被吞掉
@@ -128,7 +149,7 @@ export function createTuiView(
     pendingLine = undefined;
     editor.disableSubmit = true;
     editor.setText("");
-    show(bold(`❯ ${text}`));
+    show(`\n${bold(`❯ ${text}`)}`);
     resolveLine(text);
   };
 
@@ -183,12 +204,23 @@ export function createTuiView(
   tui.start();
 
   const view: AgentView = {
+    header({ workspace, model, sandbox }) {
+      // sandboxLabel 的括号说明属于普通终端的启动文案。
+      show(`${bold("TS Coding Agent")}${dim(` · ${model} · sandbox: ${sandbox.split("（", 1)[0]}`)}\n${dim(workspace)}`);
+    },
+
+    replIntro() {},
+
+    keyHelp() {
+      show(dim("Ctrl+O 展开 / 收起最近一组工具详情。"));
+    },
+
     info(text) {
       show(text);
     },
 
     userMessage(text) {
-      show(bold(`❯ ${text}`));
+      show(`\n${bold(`❯ ${text}`)}`);
     },
 
     log(text) {
@@ -205,8 +237,7 @@ export function createTuiView(
     toolOutput() {},
 
     status(text) {
-      statusLine.clear();
-      statusLine.addChild(new TruncatedText(dim(text), 0, 0));
+      statusText = text.replace(" · sandbox: ", " · ");
       tui.requestRender();
     },
 
@@ -232,7 +263,7 @@ export function createTuiView(
 
     confirm(question) {
       finishGroup();
-      show(yellow(`${question.trim()} [y/N]`));
+      show(`\n${yellow(`${question.trim()} [y/N]`)}`);
 
       return new Promise((resolvePromise) => {
         pendingConfirm = resolvePromise;
@@ -243,7 +274,12 @@ export function createTuiView(
       finishGroup();
       answerText = "";
       answer = new Markdown("", 0, 1, markdownTheme);
-      history.addChild(answer);
+      const markdown = answer;
+      history.addChild({
+        invalidate: () => markdown.invalidate(),
+        render: (width) => markdown.render(Math.max(1, width - 2))
+          .map((line, index) => `${index === 1 ? cyan("●") : " "} ${line}`),
+      });
     },
 
     appendAnswer(delta) {
@@ -291,8 +327,7 @@ export function createTuiView(
       stopped = true;
       finishGroup();
       tui.removeChild(editor);
-      tui.removeChild(statusLine);
-      tui.removeChild(hint);
+      tui.removeChild(bottomBar);
       // 先把还没画出来的内容画完，否则最后几行（统计、提示）会丢
       tui.renderNow();
       tui.stop();

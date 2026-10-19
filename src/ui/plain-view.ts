@@ -77,6 +77,18 @@ export function createPlainView(
   }
 
   return {
+    header({ workspace, model, sandbox, thinking }) {
+      output.write(`workspace: ${workspace}\nmodel: ${model}\n`);
+      if (thinking !== undefined) output.write(`thinking: ${thinking}\n`);
+      output.write(`sandbox: ${sandbox}\n`);
+    },
+
+    replIntro() {
+      output.write("\n交互模式：输入任务后回车运行；/help 查看命令，/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。\n");
+    },
+
+    keyHelp() {},
+
     info(text) {
       output.write(`${text}\n`);
     },

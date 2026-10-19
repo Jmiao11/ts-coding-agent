@@ -1,5 +1,7 @@
 import { PassThrough } from "node:stream";
 
+import { format } from "node:util";
+
 import { createPlainView } from "../src/ui/plain-view.js";
 
 import {
@@ -23,6 +25,7 @@ import {
 /** 假的终端：记录写出去的内容；type() 模拟用户按键 */
 class FakeTerminal implements Terminal {
   written = "";
+  width = 80;
   stopped = false;
   private onInput: (data: string) => void = () => {};
 
@@ -40,7 +43,7 @@ class FakeTerminal implements Terminal {
     this.written += data;
   }
 
-  get columns(): number { return 80; }
+  get columns(): number { return this.width; }
   get rows(): number { return 24; }
   get kittyProtocolActive(): boolean { return false; }
 
@@ -77,6 +80,72 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("preserves plain header bytes and diagnostic ordering", () => {
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk) => { written += String(chunk); });
+    const view = createPlainView({ output });
+    const fields = { workspace: "F:\\工作区", model: "model", sandbox: "host（说明）" };
+    view.header(fields);
+    expect(written).toBe([
+      format("workspace:", fields.workspace),
+      format("model:", fields.model),
+      format("sandbox:", fields.sandbox),
+      "",
+    ].join("\n"));
+    written = "";
+    view.header({ ...fields, thinking: "provider default" });
+    view.replIntro();
+    view.keyHelp();
+    expect(written).toBe(`workspace: ${fields.workspace}\nmodel: model\nthinking: provider default\nsandbox: host（说明）\n`
+      + "\n交互模式：输入任务后回车运行；/help 查看命令，/exit、Ctrl+C 或 Ctrl+D 退出。任务运行中按 Ctrl+C 只中止当前任务。\n");
+  });
+
+  it("renders a compact header and hides the plain REPL introduction", async () => {
+    const { terminal, view } = setup();
+    view.header({ workspace: "F:\\work", model: "model", sandbox: "host（说明）", thinking: "hidden" });
+    view.replIntro();
+    view.keyHelp();
+    await settle();
+    expect(terminal.written).toContain("\x1b[1mTS Coding Agent");
+    expect(terminal.text()).toContain("TS Coding Agent · model · sandbox: host");
+    expect(terminal.text()).toContain("F:\\work");
+    expect(terminal.text()).not.toContain("交互模式");
+    expect(terminal.text()).not.toContain("thinking:");
+    expect(terminal.text()).toContain("Ctrl+O 展开 / 收起最近一组工具详情");
+    view.close();
+  });
+
+  it("truncates the left status before the shortcut hint in a narrow terminal", async () => {
+    const { terminal, view } = setup();
+    terminal.width = 48;
+    view.status("agent-harness · deepseek-flash · sandbox: host · in 16.7k / out 1.4k");
+    await settle();
+    expect(terminal.text()).toContain("Enter 发送 · Ctrl+O 详情 · /help");
+    expect(terminal.text()).not.toContain("16.7k");
+    view.close();
+  });
+
+  it("separates tasks, groups and answers with one blank line", () => {
+    const { terminal, view } = setup();
+    view.userMessage("task-one");
+    view.toolStart("a", "read_file", "a.ts");
+    view.toolEnd("a", true);
+    view.beginAnswer();
+    view.appendAnswer("answer-one");
+    view.endAnswer();
+    view.userMessage("task-two");
+    view.close();
+    const rows = terminal.text().split(/\r?\n/).map((line) => line.trim());
+    const task = rows.findIndex((line) => line.includes("❯ task-one"));
+    const group = rows.findIndex((line) => line.includes("✓ 1 次工具调用"));
+    const answer = rows.findIndex((line) => line.includes("● answer-one"));
+    const next = rows.findIndex((line) => line.includes("❯ task-two"));
+    expect(group - task).toBe(2);
+    expect(answer - group).toBe(2);
+    expect(next - answer).toBe(2);
+  });
+
   it("only exposes successful output when Ctrl+O expands the latest group", async () => {
     const { terminal, view } = setup();
     view.toolStart("a", "run_command", "echo success");
@@ -199,15 +268,16 @@ describe("tui view", () => {
     view.close();
   });
 
-  it("renders a replaceable status line above the editor", async () => {
+  it("renders status and shortcuts on one line below the editor", async () => {
     const { terminal, view } = setup();
 
     view.status("model · sandbox: host");
     await settle();
 
     const text = terminal.text();
-    expect(text).toContain("model · sandbox: host");
-    expect(text.indexOf("model · sandbox: host")).toBeLessThan(text.indexOf("─"));
+    expect(text).toContain("model · host");
+    expect(text.lastIndexOf("model · host")).toBeGreaterThan(text.lastIndexOf("─"));
+    expect(text).toMatch(/model · host[^\r\n]*Enter 发送 · Ctrl\+O 详情 · \/help/);
 
     const offset = terminal.written.length;
     view.status("model · sandbox: host · in: 10 / out: 2");
@@ -295,7 +365,7 @@ describe("tui view", () => {
     await settle();
 
     expect(terminal.written).toContain("\x1b[1m❯ 直接提交的任务");
-    expect(terminal.written).toContain("\x1b[2mEnter 发送 · Ctrl+C 中止 · /help");
+    expect(terminal.text()).toContain("Enter 发送 · Ctrl+O 详情 · /help");
     expect(terminal.text().lastIndexOf("─")).toBeLessThan(
       terminal.text().lastIndexOf("Enter 发送"),
     );
@@ -315,7 +385,8 @@ describe("tui view", () => {
     expect(terminal.text()).toContain("workspace: /work");
     expect(terminal.text()).toContain("你好");
     const rows = terminal.text().split(/\r?\n/).map((row) => row.trimEnd());
-    const answerIndex = rows.indexOf("你好");
+    const answerIndex = rows.findIndex((row) => row.includes("● 你好"));
+    expect(answerIndex).toBeGreaterThan(0);
     expect(rows[answerIndex - 1]).toBe("");
     expect(rows[answerIndex + 1]).toBe("");
     view.close();

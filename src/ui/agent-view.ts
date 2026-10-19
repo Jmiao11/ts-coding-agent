@@ -4,6 +4,13 @@
  * 和 CommandExecutor 同一个思路：接口固定，实现可替换。
  */
 export type AgentView = {
+  /** 启动信息；thinking 保留普通终端原有的诊断行位置 */
+  header(options: { workspace: string; model: string; sandbox: string; thinking?: string }): void;
+
+  /** 进入交互模式时的说明，以及 /help 中的界面快捷键 */
+  replIntro(): void;
+  keyHelp(): void;
+
   /** 普通信息：启动信息、统计 */
   info(text: string): void;
 
