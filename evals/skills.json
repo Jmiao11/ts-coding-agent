@@ -1,0 +1,10 @@
+[
+  { "id": "a", "prompt": "我想用 TypeScript 写一个 MCP server，提供一个查天气的工具。先给我一个计划，不要写代码。", "expectSkill": "mcp-builder" },
+  { "id": "b", "prompt": "我要把 GitHub 的 issues 接口包装成 MCP 工具，工具名和参数应该怎么设计？只给建议，不写代码。", "expectSkill": "mcp-builder" },
+  { "id": "c", "prompt": "给这个项目设计一个产品落地页，只描述视觉方向和版式，不要写代码。", "expectSkill": "frontend-design" },
+  { "id": "d", "prompt": "我要做一个开发者工具的官网首页，配色和字体怎么选才不显得像模板？只给建议。", "expectSkill": "frontend-design" },
+  { "id": "e", "prompt": "运行 pnpm typecheck，告诉我结果。", "expectSkill": null },
+  { "id": "f", "prompt": "createTuiView 定义在哪个文件？", "expectSkill": null },
+  { "id": "g", "prompt": "MCP 是什么？用两句话解释，不需要看任何文件。", "expectSkill": null },
+  { "id": "h", "prompt": "给 src/ui/tui-view.ts 里的 dim 函数写一行注释的建议，不要改文件。", "expectSkill": null }
+]

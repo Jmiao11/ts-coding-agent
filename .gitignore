@@ -11,3 +11,4 @@ HANDOFF_*.md
 .agent-harness/
 .vscode/
 .vs/
+evals/results/
