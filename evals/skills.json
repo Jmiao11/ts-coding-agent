@@ -6,5 +6,9 @@
   { "id": "e", "prompt": "运行 pnpm typecheck，告诉我结果。", "expectSkill": null },
   { "id": "f", "prompt": "createTuiView 定义在哪个文件？", "expectSkill": null },
   { "id": "g", "prompt": "MCP 是什么？用两句话解释，不需要看任何文件。", "expectSkill": null },
-  { "id": "h", "prompt": "给 src/ui/tui-view.ts 里的 dim 函数写一行注释的建议，不要改文件。", "expectSkill": null }
+  { "id": "h", "prompt": "给 src/ui/tui-view.ts 里的 dim 函数写一行注释的建议，不要改文件。", "expectSkill": null },
+  { "id": "i", "prompt": "我想让 Claude Desktop 能直接查询我们公司 Jira 里的工单，应该怎么做？给方案，不写代码。", "expectSkill": "mcp-builder" },
+  { "id": "j", "prompt": "我在用 @modelcontextprotocol/sdk 写一个服务，工具返回的结果太长，把模型的上下文撑爆了，应该怎么处理？只给建议。", "expectSkill": "mcp-builder" },
+  { "id": "k", "prompt": "设置页现在看起来灰扑扑的，很普通，想让它显得更精致一些，有什么建议？不要改文件。", "expectSkill": "frontend-design" },
+  { "id": "l", "prompt": "帮我把 README 开头的项目介绍改得更吸引人一点，只给修改建议，不要改文件。", "expectSkill": null }
 ]

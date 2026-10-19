@@ -4,6 +4,8 @@ import {
   skillEvalPassed,
   skillTriggerCorrect,
   summarizeSkillEvals,
+  summarizeSkillMetrics,
+  summarizeSkillAB,
   type SkillEvalObservation,
 } from "../src/skills/skill-eval.js";
 
@@ -59,5 +61,36 @@ describe("skill trigger evaluation", () => {
         withoutSkill: { runs: 0, input: null, output: null, total: null },
       },
     });
+  });
+});
+
+describe("skill A/B summaries", () => {
+  it("averages each case and variant separately without scoring answers", () => {
+    const run = { id: "a", noSkills: false, toolCalls: 2, input: 100, output: 20, exitCode: 0 };
+    const summary = summarizeSkillAB([
+      run,
+      { ...run, toolCalls: 4, input: 300, output: 40 },
+      { ...run, noSkills: true, toolCalls: 1, input: 80, output: 10 },
+      { ...run, noSkills: true, toolCalls: 3, input: 120, output: 30 },
+      { ...run, id: "b", input: 900 },
+    ]);
+    expect(summary).toEqual([
+      { id: "a",
+        withSkills: { runs: 2, completed: 2, toolCalls: 3, input: 200, output: 30 },
+        withoutSkills: { runs: 2, completed: 2, toolCalls: 2, input: 100, output: 20 } },
+      { id: "b",
+        withSkills: { runs: 1, completed: 1, toolCalls: 2, input: 900, output: 20 },
+        withoutSkills: { runs: 0, completed: 0, toolCalls: null, input: null, output: null } },
+    ]);
+  });
+
+  it("retains failed counts and excludes them from averages", () => {
+    const good = { toolCalls: 4, input: 100, output: 20, exitCode: 0 };
+    expect(summarizeSkillMetrics([
+      good, { ...good, exitCode: 1, input: 0 }, { ...good, error: "missing-session" },
+    ])).toEqual({ runs: 3, completed: 1, toolCalls: 4, input: 100, output: 20 });
+    expect(summarizeSkillMetrics([{ ...good, exitCode: null }]))
+      .toEqual({ runs: 1, completed: 0, toolCalls: null, input: null, output: null });
+    expect(summarizeSkillAB([])).toEqual([]);
   });
 });

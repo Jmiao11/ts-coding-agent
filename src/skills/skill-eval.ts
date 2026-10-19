@@ -40,3 +40,33 @@ export function summarizeSkillEvals(results: SkillEvalObservation[]) {
     },
   };
 }
+
+export type SkillEvalMetrics = {
+  toolCalls: number;
+  input: number;
+  output: number;
+  exitCode: number | null;
+  error?: string;
+};
+
+/** 失败次数保留，但不把缺失数据当作零 Token 混入均值。 */
+export function summarizeSkillMetrics(results: SkillEvalMetrics[]) {
+  const completed = results.filter((result) => result.exitCode === 0 && result.error === undefined);
+  const mean = (key: "toolCalls" | "input" | "output") => completed.length
+    ? completed.reduce((sum, result) => sum + result[key], 0) / completed.length : null;
+  return {
+    runs: results.length,
+    completed: completed.length,
+    toolCalls: mean("toolCalls"),
+    input: mean("input"),
+    output: mean("output"),
+  };
+}
+
+export function summarizeSkillAB(results: (SkillEvalMetrics & { id: string; noSkills: boolean })[]) {
+  return [...new Set(results.map((result) => result.id))].map((id) => ({
+    id,
+    withSkills: summarizeSkillMetrics(results.filter((result) => result.id === id && !result.noSkills)),
+    withoutSkills: summarizeSkillMetrics(results.filter((result) => result.id === id && result.noSkills)),
+  }));
+}
