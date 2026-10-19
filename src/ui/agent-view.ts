@@ -24,4 +24,10 @@ export type AgentView = {
 
   /** 是 / 否确认，只有回答 y 才算同意。没人能回答（非交互环境）时直接返回 false */
   confirm(question: string): Promise<boolean>;
+
+  /**
+   * 用户按了 Ctrl+C。普通终端里它是进程的 SIGINT 信号；
+   * TUI 把终端切到原始模式后不会再有 SIGINT，Ctrl+C 只是一个按键，由 TUI 自己转交过来。
+   */
+  onInterrupt(handler: () => void): void;
 };

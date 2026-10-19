@@ -1,4 +1,8 @@
 import {
+  EventEmitter,
+} from "node:events";
+
+import {
   PassThrough,
 } from "node:stream";
 
@@ -87,5 +91,25 @@ describe("plain view", () => {
     view.endAnswer();
 
     expect(written()).toBe("\n[assistant] 你好\n\n");
+  });
+});
+
+
+describe("plain view interrupts", () => {
+  it("hands Ctrl+C (SIGINT) to the registered handler", () => {
+    const signals = new EventEmitter();
+    const view = createPlainView({
+      input: new PassThrough(),
+      output: new PassThrough(),
+      signals,
+    });
+
+    let interrupts = 0;
+    view.onInterrupt(() => { interrupts += 1; });
+
+    signals.emit("SIGINT");
+    signals.emit("SIGINT");
+
+    expect(interrupts).toBe(2);
   });
 });

@@ -460,10 +460,7 @@ function formatTime(
 
 
 // 所有屏幕输出和用户输入都经过 view（见 src/ui/agent-view.ts）
-const view = createPlainView({
-  // 确认问题期间的 Ctrl+C 由 readline 收到，转成中止当前任务
-  onInterrupt: () => handleInterrupt(),
-});
+const view = createPlainView();
 
 
 // ---------- Session：每条完整消息追加一行 JSONL ----------
@@ -667,7 +664,8 @@ function handleInterrupt(): void {
   commandAbort?.abort();
 }
 
-process.on("SIGINT", handleInterrupt);
+// Ctrl+C 交给 view：普通终端里是 SIGINT，TUI 里是按键
+view.onInterrupt(handleInterrupt);
 
 
 

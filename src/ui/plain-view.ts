@@ -21,8 +21,8 @@ export type PlainViewOptions = {
   /** 有没有人能回答问题。默认看 stdin 是不是终端 */
   interactive?: boolean;
 
-  /** 确认问题期间按 Ctrl+C：readline 会收到这个按键，不会触发进程的 SIGINT，所以要转交出去 */
-  onInterrupt?: () => void;
+  /** SIGINT 从哪里来，默认 process；测试时传一个 EventEmitter */
+  signals?: { on(event: "SIGINT", listener: () => void): unknown };
 };
 
 
@@ -34,6 +34,10 @@ export function createPlainView(
   const output = options.output ?? process.stdout;
   const errorOutput = options.errorOutput ?? process.stderr;
   const interactive = options.interactive ?? Boolean(process.stdin.isTTY);
+  const signals = options.signals ?? process;
+
+  // 确认问题期间 Ctrl+C 由 readline 收到，也转交给同一个 handler。
+  let interruptHandler: (() => void) | undefined;
 
   /** 问一个问题；Ctrl+C 或输入关闭时返回 null */
   function ask(
@@ -104,10 +108,15 @@ export function createPlainView(
 
       const answer = await ask(
         `${question} [y/N] `,
-        () => options.onInterrupt?.(),
+        () => interruptHandler?.(),
       );
 
       return answer?.trim().toLowerCase() === "y";
+    },
+
+    onInterrupt(handler) {
+      interruptHandler = handler;
+      signals.on("SIGINT", handler);
     },
   };
 }
