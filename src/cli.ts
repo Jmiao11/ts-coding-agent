@@ -1221,8 +1221,10 @@ const replCommands: ReplCommand[] = [
     description: "切换诊断日志显示",
     run() {
       debug = !debug;
-      view.setDebug(debug);
-      view.info(`诊断日志：${debug ? "已开启" : "已关闭"}。`);
+      const supported = view.setDebug(debug);
+      view.info(supported
+        ? `诊断日志：${debug ? "已开启" : "已关闭"}。`
+        : "普通终端始终显示诊断日志");
       return "continue";
     },
   },

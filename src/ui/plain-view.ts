@@ -101,7 +101,7 @@ export function createPlainView(
       output.write(`${text}\n`);
     },
 
-    setDebug() {},
+    setDebug() { return false; },
 
     toolOutput(title, text) {
       output.write(`\n----- ${title} output -----\n${text}\n------------------------------\n\n`);

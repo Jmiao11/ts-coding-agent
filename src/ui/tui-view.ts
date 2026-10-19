@@ -246,6 +246,7 @@ export function createTuiView(
 
     setDebug(enabled) {
       debug = enabled;
+      return true;
     },
 
     // TUI 使用 toolEnd 的结构化 detail，不使用 cli 拼好的文字。

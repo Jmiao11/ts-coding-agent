@@ -369,13 +369,13 @@ describe("tui view", () => {
     await settle();
     expect(terminal.text()).not.toContain("hidden-by-default");
 
-    view.setDebug(true);
+    expect(view.setDebug(true)).toBe(true);
     view.log("[context] est=12 threshold=100");
     await settle();
 
     expect(terminal.text()).toContain("[context] est=12 threshold=100");
     expect(terminal.written).toContain("\x1b[2m");
-    view.setDebug(false);
+    expect(view.setDebug(false)).toBe(true);
     view.log("hidden-after-toggle");
     await settle();
     expect(terminal.text()).not.toContain("hidden-after-toggle");
@@ -389,9 +389,9 @@ describe("tui view", () => {
     const view = createPlainView({ output });
 
     view.info("same text");
-    view.setDebug(false);
+    expect(view.setDebug(false)).toBe(false);
     view.log("same text");
-    view.setDebug(true);
+    expect(view.setDebug(true)).toBe(false);
     view.log("same text");
 
     expect(written).toBe("same text\nsame text\nsame text\n");
