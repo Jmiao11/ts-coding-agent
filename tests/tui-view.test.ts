@@ -1,0 +1,145 @@
+import {
+  describe,
+  expect,
+  it,
+} from "vitest";
+
+import type {
+  Terminal,
+} from "@earendil-works/pi-tui";
+
+import {
+  createTuiView,
+} from "../src/ui/tui-view.js";
+
+
+/** 假的终端：记录写出去的内容；type() 模拟用户按键 */
+class FakeTerminal implements Terminal {
+  written = "";
+  stopped = false;
+  private onInput: (data: string) => void = () => {};
+
+  start(onInput: (data: string) => void): void {
+    this.onInput = onInput;
+  }
+
+  stop(): void {
+    this.stopped = true;
+  }
+
+  async drainInput(): Promise<void> {}
+
+  write(data: string): void {
+    this.written += data;
+  }
+
+  get columns(): number { return 80; }
+  get rows(): number { return 24; }
+  get kittyProtocolActive(): boolean { return false; }
+
+  moveBy(): void {}
+  hideCursor(): void {}
+  showCursor(): void {}
+  clearLine(): void {}
+  clearFromCursor(): void {}
+  clearScreen(): void {}
+  setTitle(): void {}
+  setProgress(): void {}
+  setProgramStatus(): void {}
+
+  type(data: string): void {
+    this.onInput(data);
+  }
+
+  /** 屏幕上的文字：去掉控制序列 */
+  text(): string {
+    return this.written
+      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+      .replace(/\x1b[_\]][^\x07\x1b]*(\x07|\x1b\\)/g, "");
+  }
+}
+
+const settle = () => new Promise((resolvePromise) => setTimeout(resolvePromise, 60));
+
+
+function setup() {
+  const terminal = new FakeTerminal();
+  const view = createTuiView({ terminal, exitHook: false });
+  return { terminal, view };
+}
+
+
+describe("tui view", () => {
+  it("renders info lines and a streamed answer into the history above the editor", async () => {
+    const { terminal, view } = setup();
+
+    view.info("workspace: /work");
+    view.beginAnswer();
+    view.appendAnswer("你");
+    view.appendAnswer("好");
+    view.endAnswer();
+    await settle();
+
+    expect(terminal.text()).toContain("workspace: /work");
+    expect(terminal.text()).toContain("你好");
+    view.close();
+  });
+
+  it("reads a line from the editor", async () => {
+    const { terminal, view } = setup();
+
+    const line = view.readLine("> ");
+    terminal.type("修复测试");
+    terminal.type("\r");
+
+    expect(await line).toBe("修复测试");
+    view.close();
+  });
+
+  it("answers a confirmation with a single key: only y means yes", async () => {
+    const { terminal, view } = setup();
+
+    const yes = view.confirm("允许吗？");
+    await settle();
+    expect(terminal.text()).toContain("允许吗？ [y/N]");
+    terminal.type("y");
+    expect(await yes).toBe(true);
+
+    const no = view.confirm("允许吗？");
+    terminal.type("\r");
+    expect(await no).toBe(false);
+    view.close();
+  });
+
+  it("turns Ctrl+C into an interrupt while a task runs, and into 'no input' at the prompt", async () => {
+    const { terminal, view } = setup();
+    let interrupts = 0;
+    view.onInterrupt(() => { interrupts += 1; });
+
+    // 任务运行中（没有在等输入）：中止任务
+    terminal.type("\x03");
+    expect(interrupts).toBe(1);
+
+    // 在提示符处：和普通终端一样，readLine 返回 null（REPL 据此退出）
+    const line = view.readLine("> ");
+    terminal.type("\x03");
+    expect(await line).toBeNull();
+    expect(interrupts).toBe(1);
+
+    // 确认问题期间：中止任务，并当作拒绝
+    const answer = view.confirm("允许吗？");
+    terminal.type("\x03");
+    expect(await answer).toBe(false);
+    expect(interrupts).toBe(2);
+    view.close();
+  });
+
+  it("restores the terminal when closed", () => {
+    const { terminal, view } = setup();
+
+    view.close();
+    view.close();
+
+    expect(terminal.stopped).toBe(true);
+  });
+});

@@ -30,4 +30,7 @@ export type AgentView = {
    * TUI 把终端切到原始模式后不会再有 SIGINT，Ctrl+C 只是一个按键，由 TUI 自己转交过来。
    */
   onInterrupt(handler: () => void): void;
+
+  /** 界面用完了：普通终端什么都不用做；TUI 要把终端恢复原样。可以重复调用 */
+  close(): void;
 };

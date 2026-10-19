@@ -147,6 +147,10 @@ import {
 } from "./ui/plain-view.js";
 
 import {
+  createTuiView,
+} from "./ui/tui-view.js";
+
+import {
   streamAnswers,
 } from "./ui/answer-stream.js";
 
@@ -175,6 +179,7 @@ const HELP = `用法：
       --sandbox <host|codex|mxc>  run_command 在哪里执行（默认 host：本机，没有隔离）
                           codex：通过 codex sandbox 执行（只支持 Windows，需要 AGENT_CODEX_EXE）
                           mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
+      --tui               全屏交互界面（实验性；默认是普通的逐行输出）
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
@@ -211,6 +216,7 @@ function parseCliArgs() {
       "env-file": { type: "string" },
       "context-window": { type: "string" },
       sandbox: { type: "string" },
+      tui: { type: "boolean" },
     },
   });
 }
@@ -460,7 +466,11 @@ function formatTime(
 
 
 // 所有屏幕输出和用户输入都经过 view（见 src/ui/agent-view.ts）
-const view = createPlainView();
+if (values.tui && !(process.stdin.isTTY && process.stdout.isTTY)) {
+  fail("--tui 需要在交互式终端里运行。");
+}
+
+const view = values.tui ? createTuiView() : createPlainView();
 
 
 // ---------- Session：每条完整消息追加一行 JSONL ----------
@@ -1580,3 +1590,6 @@ if (existsSync(active.writer.path)) {
 view.info(
   "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
 );
+
+// TUI 要把终端恢复原样（普通终端什么都不做）
+view.close();

@@ -118,5 +118,7 @@ export function createPlainView(
       interruptHandler = handler;
       signals.on("SIGINT", handler);
     },
+
+    close() {},
   };
 }
