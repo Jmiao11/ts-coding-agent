@@ -1,5 +1,13 @@
+
+export type CodingSystemPromptOptions = {
+  /** run_command 在哪里执行；不是 host 时告诉模型沙箱会带来哪些「假象」 */
+  sandbox?: "host" | "codex" | "mxc";
+};
+
+
 export function createCodingSystemPrompt(
   workspaceRoot: string,
+  options: CodingSystemPromptOptions = {},
 ): string {
   const os =
     process.platform === "win32"
@@ -12,6 +20,7 @@ export function createCodingSystemPrompt(
     `Workspace root: ${workspaceRoot}`,
     `Operating system: ${os}`,
     "File tool paths are relative to the workspace root. Commands run in the workspace root.",
+          ...sandboxNotes(options.sandbox),
     "",
     "How to work:",
 
@@ -53,6 +62,27 @@ export function createCodingSystemPrompt(
    "- Do not run git commands that change history, branches or remotes (commit, push, reset, checkout, rebase, clean). The user reviews your changes with git diff.",
 
   ].join("\n");
+}
+
+
+/*
+ * 实测（MXC）：ping 被网络隔离拦住后，模型以为系统坏了，建议用管理员权限 netsh winsock reset；
+ * dir src 因为沙箱读不了而失败，模型断定 src 不存在，还提出要重新创建。
+ * 模型不知道自己在沙箱里，就会把沙箱的限制当成工作区的事实。
+ */
+function sandboxNotes(
+  sandbox: CodingSystemPromptOptions["sandbox"],
+): string[] {
+  if (sandbox === undefined || sandbox === "host") {
+    return [];
+  }
+
+  return [
+    "",
+    `Sandbox: run_command runs commands in a restricted sandbox (${sandbox}). Network access is blocked, files outside the workspace may be inaccessible, and some paths inside the workspace may be unreadable to commands.`,
+    "If a command reports \"not found\", \"access denied\" or a network error for something you expect to exist, treat it as a possible sandbox limitation: check with list_directory or read_file (they do not go through the sandbox) before concluding that a file is missing.",
+    "Never suggest changing system or network settings to work around the sandbox; tell the user what was blocked instead.",
+  ];
 }
 
 /** 子 Agent 的最终回答会作为报告交给主 Agent。 */

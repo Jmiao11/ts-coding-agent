@@ -17,7 +17,7 @@
 
 </div>
 
-> **项目定位**：这是用于学习与工程实践的 **Coding Agent Runtime**，参考 [Pi](https://github.com/earendil-works/pi) 的架构思想，并非 Pi 官方发行版，也不是 Claude Code / Codex 的成熟替代品。**当前没有完整的命令沙箱**，请先在可信、可随时恢复的测试仓库中体验。
+> **项目定位**：这是用于学习与工程实践的 **Coding Agent Runtime**，参考 [Pi](https://github.com/earendil-works/pi) 的架构思想，并非 Pi 官方发行版，也不是 Claude Code / Codex 的成熟替代品。**命令默认在本机执行**，可选隔离后端及其边界见 [Sandboxes](#sandboxes)；请先在可信、可随时恢复的测试仓库中体验。
 
 ## 🌟 为什么做这个项目
 
@@ -227,6 +227,52 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 
 > `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。`package.json` 中的二进制名是 `ts-coding-agent`，但本版本尚未提供公开的全局安装渠道。
 
+## Sandboxes
+
+用 `--sandbox` 选择 `run_command` 的执行后端：
+
+| 后端 | 平台与前提 | 执行方式 |
+| --- | --- | --- |
+| `host`（默认） | 项目支持的平台 | 直接在本机执行，不隔离 |
+| `codex` | Windows；设置 `AGENT_CODEX_EXE` 为真实 `codex.exe` 的完整路径 | 通过 `codex sandbox` 执行 |
+| `mxc`（实验性） | Windows、Node.js 24+；安装可选依赖 `@microsoft/mxc-sdk` | 直接通过 Microsoft MXC SDK 执行 |
+
+例如：`node dist/cli.js --sandbox mxc --workspace <工作区>`。选择沙箱后，任何启动或自检失败都会拒绝运行，绝不退回本机执行。
+
+沙箱只用于 `run_command`。`write_file` / `edit_file` 在宿主机执行，不经过沙箱，由 `workspace-path` 的检查限制可访问的路径。
+
+### MXC 的已知限制
+
+- 当前实测隔离等级为 `appcontainer-dacl`：运行时临时修改授权目录的权限，正常结束后撤销。默认只读授权当前 Node.js 所在目录；额外工具目录通过 `AGENT_MXC_READONLY` 配置，用分号分隔。
+- 显式设置 `ui.disable=false`，允许创建窗口，以避免 Node.js 初始化失败；剪贴板访问和模拟输入已显式禁止（`clipboard: "none"`、`allowInputInjection: false`）。
+- 用 `subst` 把工作区映射成盘符根目录，绕过 Git 和 Node.js 解析工作区上级目录时的访问问题，见 [microsoft/mxc#1464](https://github.com/microsoft/mxc/issues/1464)。
+- 入口脚本位于工作区外的全局工具（例如全局安装的 `pnpm`）当前不能使用；需要使用工作区内的工具入口。
+- SDK 本身装在含中文的路径下时无法获取隔离等级；也不能调用 `getAvailableBackends()`，否则会 panic。工作区的 `subst` 映射不会改变 SDK 的安装路径。
+- 所有者不是当前用户的目录可能读不到，Git 可能把其中的文件报成“已删除”。启动时只检查工作区顶层，跳过 `.git` 和 `node_modules`，发现这类条目会给出警告，不会拒绝启动。
+- Agent 被强行结束时，`subst` 映射可能残留。用 `subst` 查看映射，确认对应的盘符后手动删除，例如 `subst Z: /D`；`Z:` 只是示例，应换成实际盘符。
+
+遇到 `CodexSandboxOffline` 等其他所有者时，按以下步骤复制替换：
+
+1. 先关闭 PyCharm 和 Codex 桌面版，避免文件被锁住或再次由沙箱用户创建。
+2. 在独立打开的普通 PowerShell 中，以当前用户把受影响的目录或文件复制到全新位置。目录可用普通的 `Copy-Item -Recurse`；不要保留原所有者或原 ACL。
+3. 核对复制内容后，把原条目移到工作区外作为备份，再把新副本放回原位置和原名；对警告中的条目逐一处理，保留 `.git` 和 `node_modules`。
+4. 用 `(Get-Acl -LiteralPath .\src).Owner` 等命令检查新副本，确认所有者与 `[System.Security.Principal.WindowsIdentity]::GetCurrent().Name` 一致，再重新启动 Agent。确认文件和 Git 状态正常后再处理备份。
+
+### Codex 的已知限制
+
+- 不拦截工作区外的读取，因此工作区外的文件仍可能被命令读到。
+- Codex 桌面版运行时可能锁住沙箱需要的文件；遇到这类启动失败，可关闭桌面版后在外部终端运行。
+- 会在工作区留下永久权限条目，包括 `CodexSandboxUsers` 和记录在 `~/.codex/cap_sid` 里的 SID；进程结束后不会自动撤销。
+
+需要撤销这些权限时，先用 `icacls "<dir>"` 查看实际受影响目录，再删除对应条目：
+
+```powershell
+icacls "<dir>" /remove "CodexSandboxUsers"
+icacls "<dir>" /remove "*<SID>"
+```
+
+将 `<dir>` 替换为受影响的目录，将 `<SID>` 替换为 `~/.codex/cap_sid` 中的实际 SID；数字 SID 前面的 `*` 要保留。只删除确认由 Codex 添加的条目。
+
 ## ✅ 测试与验证
 
 在仓库根目录执行：
@@ -238,13 +284,13 @@ pnpm typecheck
 pnpm build
 ```
 
-**发布准备阶段的本地基线（Windows）**：Vitest **18 个测试文件、83 项测试通过**，TypeScript 类型检查与构建通过。这是历史本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **26 个测试文件通过，130 项测试通过、1 项跳过**，`pnpm typecheck` 通过。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
 测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销与部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
 ## ⚠️ 范围与已知限制
 
-- **没有完整命令沙箱**：`run_command` 可启动本机进程，命令审批和文件路径保护不能阻止所有工作区外的读写；请只在可信、可恢复的测试环境中使用。
+- **命令隔离取决于后端**：默认的 `host` 不隔离，`codex` 和实验性的 `mxc` 各有边界，详见 [Sandboxes](#sandboxes)；请只在可信、可恢复的测试环境中使用。
 - **当前必须是 Git 仓库**：非 Git 目录会被拒绝；无需额外配置路径，默认使用当前目录，也可传 `--workspace`。
 - **`/undo` 不是 Git 级回滚**：只跟踪 `write_file` / `edit_file`，不能保证撤销 `run_command` 的文件副作用，也不会重写暂存区或提交历史。
 - **会话记录包含上下文**：JSONL 可能保留模型读取过的代码及工具输出，不应把本地会话文件当作可以直接公开的日志。

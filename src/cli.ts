@@ -124,6 +124,20 @@ import {
 } from "./tools/run-command.js";
 
 import {
+  createCodexSandboxExecutor,
+  createHostExecutor,
+  type CommandExecutor,
+} from "./tools/command-executor.js";
+
+import {
+  prepareCodexSandbox,
+} from "./tools/codex-sandbox-check.js";
+
+import {
+  setupMxcSandbox,
+} from "./tools/mxc-setup.js";
+
+import {
   createSearchTextTool,
 } from "./tools/search-text.js";
 
@@ -153,11 +167,17 @@ const HELP = `用法：
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
+      --sandbox <host|codex|mxc>  run_command 在哪里执行（默认 host：本机，没有隔离）
+                          codex：通过 codex sandbox 执行（只支持 Windows，需要 AGENT_CODEX_EXE）
+                          mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
   可选：AGENT_THINKING=enabled 或 disabled（DeepSeek：显式开启或关闭 thinking）
+   --sandbox codex 时：AGENT_CODEX_EXE=codex.exe 的完整路径（不能是 codex.cmd）
+                      AGENT_SANDBOX_MODE=elevated（默认）或 mxc
+  --sandbox mxc 时：AGENT_MXC_READONLY=额外只读授权的目录，用分号分隔（默认只授权 node 所在目录）
 
 交互模式：/exit、Ctrl+C 或 Ctrl+D 退出；任务运行中按 Ctrl+C 只中止当前任务。
 任何时候连按两次 Ctrl+C 都会强制退出。`;
@@ -185,6 +205,7 @@ function parseCliArgs() {
       model: { type: "string", short: "m" },
       "env-file": { type: "string" },
       "context-window": { type: "string" },
+      sandbox: { type: "string" },
     },
   });
 }
@@ -326,6 +347,89 @@ if (gitStatus.stdout.trim().length > 0) {
   console.warn(
     "⚠ 工作区有未提交的改动，建议先 commit，方便单独审查和回滚 Agent 的改动。\n",
   );
+}
+
+// ---------- 命令在哪里执行：本机或 Codex 沙箱 ----------
+// 沙箱起不来就拒绝启动，绝不悄悄退回本机执行
+
+const sandbox = values.sandbox ?? "host";
+
+if (sandbox !== "host" && sandbox !== "codex" && sandbox !== "mxc") {
+  fail(`--sandbox 只能是 host、codex 或 mxc（收到：${sandbox}）。`);
+}
+
+let commandExecutor: CommandExecutor;
+let sandboxLabel: string;
+
+if (sandbox === "host") {
+  commandExecutor = createHostExecutor();
+  sandboxLabel = "host（命令直接在本机执行，没有隔离）";
+} else if (sandbox === "codex") {
+  if (process.platform !== "win32") {
+    fail("--sandbox codex 目前只支持 Windows。");
+  }
+
+  const codexExe = requiredEnv("AGENT_CODEX_EXE");
+
+  // Node 不经过 shell 无法启动 .cmd，所以必须是真正的 codex.exe
+  if (!codexExe.toLowerCase().endsWith(".exe") || !existsSync(codexExe)) {
+    fail(
+      `AGENT_CODEX_EXE 必须是存在的 codex.exe 完整路径（收到：${codexExe}）。\n`
+      + "npm 安装的一般在 <npm 全局目录>\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+    );
+  }
+
+  const mode = process.env.AGENT_SANDBOX_MODE || "elevated";
+
+  if (mode !== "elevated" && mode !== "mxc") {
+    fail(`AGENT_SANDBOX_MODE 只能是 elevated 或 mxc（收到：${mode}）。`);
+  }
+
+  console.log("正在检查 Codex 沙箱…");
+
+  let clearEnv: string[];
+
+  try {
+    ({ clearEnv } = await prepareCodexSandbox({
+      codexExe,
+      mode,
+      cwd: workspaceRoot,
+    }));
+  } catch (error) {
+    fail(
+      `${error instanceof Error ? error.message : String(error)}\n\n`
+      + "不会退回本机执行。确实要在本机执行命令，请去掉 --sandbox codex。",
+    );
+  }
+
+  commandExecutor = createCodexSandboxExecutor({
+    codexExe,
+    mode,
+    clearEnv,
+  });
+
+  sandboxLabel = `codex（${mode}）`
+    + (clearEnv.length > 0
+      ? `，已清空 Codex 配置注入的变量：${clearEnv.join(", ")}`
+      : "");
+} else {
+  console.log("正在检查 MXC 沙箱…");
+
+  try {
+    const mxc = await setupMxcSandbox(workspaceRoot);
+
+    commandExecutor = mxc.executor;
+    sandboxLabel = mxc.label;
+
+    for (const warning of mxc.warnings) {
+      console.warn(`⚠ MXC：${warning}`);
+    }
+  } catch (error) {
+    fail(
+      `${error instanceof Error ? error.message : String(error)}\n\n`
+      + "不会退回本机执行。确实要在本机执行命令，请去掉 --sandbox mxc。",
+    );
+  }
 }
 
 
@@ -932,7 +1036,7 @@ const agent = new Agent({
     messages: restored?.messages ?? [],
 
     systemPrompt:
-      createCodingSystemPrompt(workspaceRoot),
+      createCodingSystemPrompt(workspaceRoot, { sandbox }),
 
     tools: [
       createListDirectoryTool(workspaceRoot),
@@ -940,7 +1044,7 @@ const agent = new Agent({
       createSearchTextTool(workspaceRoot),
       createWriteFileTool(workspaceRoot, { track: trackWrite }),
       createEditFileTool(workspaceRoot, { track: trackWrite }),
-      createRunCommandTool(workspaceRoot),
+      createRunCommandTool(workspaceRoot, { executor: commandExecutor }),
       taskTool,
     ],
   },
@@ -1522,6 +1626,7 @@ async function runRepl(): Promise<void> {
 console.log("workspace:", workspaceRoot);
 console.log("model:", modelId);
 console.log("thinking:", thinking ?? "(provider default)");
+console.log("sandbox:", sandboxLabel);
 console.log(
   "session:",
   restored
