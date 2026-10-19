@@ -40,6 +40,17 @@ function fakeTerminal(interactive = true) {
 
 
 describe("plain view", () => {
+  it("does not duplicate the existing tool start/end logs", () => {
+    const { view, written, errors } = fakeTerminal();
+
+    view.toolStart("a", "read_file", "README.md");
+    view.toolEnd("a", true);
+    view.toolEnd("b", false);
+
+    expect(written()).toBe("");
+    expect(errors()).toBe("");
+  });
+
   it("does not write status updates or repeated closes to either output stream", () => {
     const { view, written, errors } = fakeTerminal();
 
