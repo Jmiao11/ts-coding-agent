@@ -61,6 +61,13 @@ export function findForeignOwners(
 }
 
 
+export function envWithoutPSModulePath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH"),
+  );
+}
+
+
 function workspaceOwnerWarnings(workspaceRoot: string): string[] {
   try {
     const result = spawnSync(
@@ -74,7 +81,7 @@ function workspaceOwnerWarnings(workspaceRoot: string): string[] {
       {
         encoding: "utf8",
         windowsHide: true,
-        env: { ...process.env, TSA_MXC_WORKSPACE: workspaceRoot },
+        env: { ...envWithoutPSModulePath(process.env), TSA_MXC_WORKSPACE: workspaceRoot },
       },
     );
 

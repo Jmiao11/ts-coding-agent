@@ -5,6 +5,7 @@ import {
 } from "vitest";
 
 import {
+  envWithoutPSModulePath,
   findForeignOwners,
 } from "../src/tools/mxc-setup.js";
 
@@ -30,5 +31,21 @@ describe("findForeignOwners", () => {
     expect(findForeignOwners([
       { name: "src", owner: "MACHINE\\me" },
     ], "MACHINE\\me")).toEqual([]);
+  });
+});
+
+
+describe("envWithoutPSModulePath", () => {
+  it("removes both PSModulePath casings without changing other variables or the input", () => {
+    const env = {
+      PSModulePath: "PowerShell-7-modules",
+      PSMODULEPATH: "other-modules",
+      Path: "tools",
+      SYSTEMROOT: "windows",
+    };
+
+    expect(envWithoutPSModulePath(env)).toEqual({ Path: "tools", SYSTEMROOT: "windows" });
+    expect(env.PSModulePath).toBe("PowerShell-7-modules");
+    expect(env.PSMODULEPATH).toBe("other-modules");
   });
 });
