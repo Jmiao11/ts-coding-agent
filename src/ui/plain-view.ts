@@ -81,6 +81,10 @@ export function createPlainView(
       output.write(`${text}\n`);
     },
 
+    userMessage(text) {
+      output.write(`task: ${text} \n\n`);
+    },
+
     log(text) {
       output.write(`${text}\n`);
     },

@@ -7,6 +7,9 @@ export type AgentView = {
   /** 普通信息：启动信息、统计 */
   info(text: string): void;
 
+  /** 命令行直接提交的任务；交互输入由 readLine 记录 */
+  userMessage(text: string): void;
+
   /** 诊断日志：模型、工具、上下文等运行细节 */
   log(text: string): void;
 

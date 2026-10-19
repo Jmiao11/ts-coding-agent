@@ -136,6 +136,7 @@ describe("tui view", () => {
     expect(closingOutput).toContain("final-history-line");
     expect(closingOutput).not.toContain("─");
     expect(closingOutput).not.toContain("status-to-remove");
+    expect(closingOutput).not.toContain("Enter 发送");
     expect(terminal.stopped).toBe(true);
   });
 
@@ -208,6 +209,29 @@ describe("tui view", () => {
     expect(written).toBe("same text\nsame text\nsame text\n");
   });
 
+  it("preserves the plain command-line task format exactly", () => {
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk) => { written += String(chunk); });
+    const view = createPlainView({ output });
+
+    view.userMessage("任务\n第二行");
+    expect(written).toBe("task: 任务\n第二行 \n\n");
+  });
+
+  it("shows bold command-line tasks and a dim hint below the editor", async () => {
+    const { terminal, view } = setup();
+    view.userMessage("直接提交的任务");
+    await settle();
+
+    expect(terminal.written).toContain("\x1b[1m❯ 直接提交的任务");
+    expect(terminal.written).toContain("\x1b[2mEnter 发送 · Ctrl+C 中止 · /help");
+    expect(terminal.text().lastIndexOf("─")).toBeLessThan(
+      terminal.text().lastIndexOf("Enter 发送"),
+    );
+    view.close();
+  });
+
   it("renders info lines and a streamed answer into the history above the editor", async () => {
     const { terminal, view } = setup();
 
@@ -220,6 +244,10 @@ describe("tui view", () => {
 
     expect(terminal.text()).toContain("workspace: /work");
     expect(terminal.text()).toContain("你好");
+    const rows = terminal.text().split(/\r?\n/).map((row) => row.trimEnd());
+    const answerIndex = rows.indexOf("你好");
+    expect(rows[answerIndex - 1]).toBe("");
+    expect(rows[answerIndex + 1]).toBe("");
     view.close();
   });
 
@@ -231,6 +259,8 @@ describe("tui view", () => {
     terminal.type("\r");
 
     expect(await line).toBe("修复测试");
+    await settle();
+    expect(terminal.written).toContain("\x1b[1m❯ 修复测试");
     view.close();
   });
 

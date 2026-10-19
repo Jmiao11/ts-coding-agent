@@ -79,10 +79,12 @@ export function createTuiView(
   const history = new Container();
   const statusLine = new Container();
   const editor = new Editor(tui, editorTheme);
+  const hint = new Text(dim("Enter 发送 · Ctrl+C 中止 · /help"), 0, 0);
 
   tui.addChild(history);
   tui.addChild(statusLine);
   tui.addChild(editor);
+  tui.addChild(hint);
   tui.setFocus(editor);
 
   // 不在等输入的时候（比如任务运行中）不接受提交，免得输入被吞掉
@@ -112,7 +114,7 @@ export function createTuiView(
     pendingLine = undefined;
     editor.disableSubmit = true;
     editor.setText("");
-    show(`${dim(">")} ${text}`);
+    show(bold(`❯ ${text}`));
     resolveLine(text);
   };
 
@@ -163,6 +165,10 @@ export function createTuiView(
   const view: AgentView = {
     info(text) {
       show(text);
+    },
+
+    userMessage(text) {
+      show(bold(`❯ ${text}`));
     },
 
     log(text) {
@@ -274,6 +280,7 @@ export function createTuiView(
       stopped = true;
       tui.removeChild(editor);
       tui.removeChild(statusLine);
+      tui.removeChild(hint);
       // 先把还没画出来的内容画完，否则最后几行（统计、提示）会丢
       tui.renderNow();
       tui.stop();

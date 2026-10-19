@@ -15,6 +15,7 @@ import {
 } from "node:os";
 
 import {
+  basename,
   join,
   resolve,
 } from "node:path";
@@ -157,6 +158,8 @@ import {
 import {
   showToolActivity,
 } from "./ui/tool-activity.js";
+
+import { formatTokenCount } from "./ui/status-text.js";
 
 import type {
   AgentMessage,
@@ -745,7 +748,7 @@ function printTokens(
   scope: string,
 ): void {
   if (stats.input > 0) {
-    view.info(format(`Token 用量（主任务${scope}）：`, {
+    view.log(format(`Token 用量（主任务${scope}）：`, {
       input: stats.input,
       cachedInput: stats.cached,
       output: stats.output,
@@ -754,14 +757,14 @@ function printTokens(
   }
 
   if (stats.compactions > 0) {
-    view.info(format(`Token 用量（压缩${scope}）：`, {
+    view.log(format(`Token 用量（压缩${scope}）：`, {
       calls: stats.compactions,
       input: stats.compactionInput,
       output: stats.compactionOutput,
     }));
   }
   if (stats.subtasks > 0) {
-    view.info(format(`Token 用量（子任务${scope}）：`, {
+    view.log(format(`Token 用量（子任务${scope}）：`, {
       calls: stats.subtasks,
       input: stats.subtaskInput,
       output: stats.subtaskOutput,
@@ -773,7 +776,7 @@ function printTokens(
     || stats.compactions > 0
     || stats.subtasks > 0
   ) {
-    view.info(format(`Token 合计${scope}：`, {
+    view.log(format(`Token 合计${scope}：`, {
       input:
         stats.input
         + stats.compactionInput
@@ -1147,16 +1150,20 @@ async function runTask(
     view.info("\n已中止。");
   }
 
-  view.info(format("\n模型调用次数：", current.modelCalls));
-  view.info(format("执行过的工具：", current.tools));
+  view.log(format("\n模型调用次数：", current.modelCalls));
+  view.log(format("执行过的工具：", current.tools));
   printTokens(current, "");
 
   addStats(total, current);
   taskCount += 1;
+  updateStatus();
+}
+
+function updateStatus(): void {
   view.status(
-    `${modelId} · sandbox: ${sandbox}`
-    + ` · in: ${total.input + total.compactionInput + total.subtaskInput}`
-    + ` / out: ${total.output + total.compactionOutput + total.subtaskOutput}`,
+    `${basename(workspaceRoot)} · ${modelId} · sandbox: ${sandbox}`
+    + ` · in ${formatTokenCount(total.input + total.compactionInput + total.subtaskInput)}`
+    + ` / out ${formatTokenCount(total.output + total.compactionOutput + total.subtaskOutput)}`,
   );
 }
 
@@ -1578,25 +1585,25 @@ async function runRepl(): Promise<void> {
 }
 
 
-view.status(`${modelId} · sandbox: ${sandbox}`);
+updateStatus();
 view.info(format("workspace:", workspaceRoot));
 view.info(format("model:", modelId));
-view.info(format("thinking:", thinking ?? "(provider default)"));
+view.log(format("thinking:", thinking ?? "(provider default)"));
 view.info(format("sandbox:", sandboxLabel));
-view.info(format(
+view.log(format(
   "session:",
   restored
     ? `继续 ${active.writer.path}（${restored.messages.length} 条消息${restored.checkpoint ? "，已压缩过" : ""}）`
     : active.writer.path,
 ));
-view.info(
+view.log(
   `context: window=${compactionSettings.contextWindow} reserve=${compactionSettings.reserveTokens} keepRecent=${compactionSettings.keepRecentTokens}`,
 );
 
 if (interactive) {
   await runRepl();
 } else {
-  view.info(format("task:", argTask, "\n"));
+  view.userMessage(argTask);
   await runTask(argTask);
 
   if (interrupted) {
