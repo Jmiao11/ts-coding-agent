@@ -164,6 +164,21 @@ export function createTuiView(
       show(dim(text));
     },
 
+    toolOutput(title, text) {
+      const lines = text.split(/\r?\n/);
+
+      if (lines.at(-1) === "") {
+        lines.pop();
+      }
+
+      const omitted = Math.max(0, lines.length - 8);
+      show([
+        `----- ${title} output -----`,
+        ...(omitted > 0 ? [dim(`… 省略 ${omitted} 行`)] : []),
+        ...lines.slice(-8),
+      ].join("\n"));
+    },
+
     warn(text) {
       show(yellow(text));
     },

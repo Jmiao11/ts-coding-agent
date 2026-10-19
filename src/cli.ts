@@ -1060,9 +1060,7 @@ agent.subscribe((event) => {
       ?.map((item) => item.text)
       .join("") ?? "";
 
-    view.info(
-      `\n----- run_command output -----\n${text}\n------------------------------\n`,
-    );
+    view.toolOutput("run_command", text);
   }
 
   if (

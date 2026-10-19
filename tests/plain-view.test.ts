@@ -40,6 +40,15 @@ function fakeTerminal(interactive = true) {
 
 
 describe("plain view", () => {
+  it.each(["", "第一行\n第二行", "第一行\r\n第二行\r\n"])("keeps the existing tool-output format for %j", (text) => {
+    const { view, written, errors } = fakeTerminal();
+
+    view.toolOutput("run_command", text);
+
+    expect(written()).toBe(`\n----- run_command output -----\n${text}\n------------------------------\n\n`);
+    expect(errors()).toBe("");
+  });
+
   it("writes logs exactly like info, including whitespace", () => {
     const { view, written, errors } = fakeTerminal();
     const text = "\n[context] est=12 threshold=100\n";

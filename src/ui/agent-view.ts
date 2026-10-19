@@ -10,6 +10,9 @@ export type AgentView = {
   /** 诊断日志：模型、工具、上下文等运行细节 */
   log(text: string): void;
 
+  /** 工具输出；界面决定是否折叠长内容 */
+  toolOutput(title: string, text: string): void;
+
   /** 警告和错误 */
   warn(text: string): void;
 

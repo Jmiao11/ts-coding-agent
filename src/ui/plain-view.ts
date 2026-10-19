@@ -85,6 +85,10 @@ export function createPlainView(
       output.write(`${text}\n`);
     },
 
+    toolOutput(title, text) {
+      output.write(`\n----- ${title} output -----\n${text}\n------------------------------\n\n`);
+    },
+
     warn(text) {
       errorOutput.write(`${text}\n`);
     },

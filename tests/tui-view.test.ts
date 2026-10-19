@@ -70,6 +70,40 @@ function setup() {
 
 
 describe("tui view", () => {
+  it("collapses tool output to its last eight lines with an omitted-line count", async () => {
+    const { terminal, view } = setup();
+    const lines = Array.from({ length: 12 }, (_, index) => `tool-row-${index + 1}`);
+
+    view.toolOutput("run_command", `${lines.join("\r\n")}\r\n`);
+    await settle();
+
+    const text = terminal.text();
+    expect(text).toContain("----- run_command output -----");
+    expect(text).toContain("… 省略 4 行");
+    expect(text).not.toMatch(/tool-row-[1-4](?:\D|$)/);
+
+    for (const line of lines.slice(-8)) {
+      expect(text).toContain(line);
+    }
+
+    view.close();
+  });
+
+  it("shows all eight lines without an omission marker at the boundary", async () => {
+    const { terminal, view } = setup();
+    const lines = Array.from({ length: 8 }, (_, index) => `short-row-${index + 1}`);
+
+    view.toolOutput("run_command", `${lines.join("\n")}\n`);
+    await settle();
+
+    expect(terminal.text()).not.toContain("省略");
+    for (const line of lines) {
+      expect(terminal.text()).toContain(line);
+    }
+
+    view.close();
+  });
+
   it("renders diagnostic logs in dim text", async () => {
     const { terminal, view } = setup();
 
