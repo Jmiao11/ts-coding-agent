@@ -33,14 +33,18 @@ export type SkillCatalog = {
 
 
 /**
- * 解析开头的 frontmatter：
+ * 解析开头的 frontmatter（YAML 的一个子集）：
  *
  *   ---
  *   name: repo-overview
- *   description: 一行说明
+ *   description: >          ← 多行值：> 折叠成一行，| 保留换行（后面可以跟 - 或 +）
+ *     第一行
+ *     第二行
+ *   metadata:               ← 嵌套的映射：我们用不到，整块跳过，值记为空字符串
+ *     author: someone
  *   ---
  *
- * 只支持单行的 `key: value`。遇到不认识的写法（比如 YAML 的多行值）返回 undefined，
+ * 只认识这几种写法。遇到不认识的（比如顶层出现一行没有冒号的文字）返回 undefined，
  * 而不是猜着解析：解析错了比报错更难发现。
  */
 export function parseFrontmatter(
@@ -61,10 +65,40 @@ export function parseFrontmatter(
 
   const fields: Record<string, string> = {};
 
+  // 正在读的那个字段：缩进的行都属于它
+  let current: { key: string; style: "plain" | "literal" | "folded" | "nested"; parts: string[] } | undefined;
+
+  function finish(): void {
+    if (current) {
+      fields[current.key] =
+        current.style === "nested" ? ""
+        : current.style === "literal" ? current.parts.join("\n").trim()
+        : current.parts.join(" ").trim();
+    }
+
+    current = undefined;
+  }
+
   for (const line of lines.slice(1, end)) {
-    if (line.trim() === "" || line.trimStart().startsWith("#")) {
+    if (line.trim() === "") {
       continue;
     }
+
+    // 缩进的行：上一个字段的后续内容
+    if (/^\s/.test(line)) {
+      if (!current) {
+        return undefined;
+      }
+
+      current.parts.push(line.trim());
+      continue;
+    }
+
+    if (line.startsWith("#")) {
+      continue;
+    }
+
+    finish();
 
     const match = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
 
@@ -73,23 +107,31 @@ export function parseFrontmatter(
     }
 
     const key = match[1]!;
-    let value = match[2]!.trim();
+    const value = match[2]!.trim();
 
-    if (value === "|" || value === ">" || value.startsWith("|-") || value.startsWith(">-")) {
-      return undefined;
+    if (/^[|>][+-]?$/.test(value)) {
+      current = { key, style: value.startsWith("|") ? "literal" : "folded", parts: [] };
+    } else if (value === "") {
+      current = { key, style: "nested", parts: [] };
+    } else {
+      current = { key, style: "plain", parts: [unquote(value)] };
     }
-
-    // 允许用一对引号把值括起来
-    if (value.length >= 2 && (value[0] === "\"" || value[0] === "'") && value.at(-1) === value[0]) {
-      value = value.slice(1, -1);
-    }
-
-    fields[key] = value;
   }
+
+  finish();
 
   return fields;
 }
 
+
+/** 允许用一对引号把值括起来 */
+function unquote(value: string): string {
+  if (value.length >= 2 && (value[0] === "\"" || value[0] === "'") && value.at(-1) === value[0]) {
+    return value.slice(1, -1);
+  }
+
+  return value;
+}
 
 /** 检查一个 skill 的 frontmatter，返回问题描述；没问题返回 undefined */
 function checkSkill(

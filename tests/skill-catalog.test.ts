@@ -37,13 +37,43 @@ describe("parseFrontmatter", () => {
     });
   });
 
+  // 下面三种写法都来自 anthropics/skills 里真实的 SKILL.md
+  it("reads YAML multi-line values: > folds into one line, | keeps the line breaks", () => {
+    expect(
+      parseFrontmatter("---\nname: a\ndescription: >\n  Stop and check this skill\n  before finishing.\nlicense: Complete terms in LICENSE.txt\n---\n"),
+    ).toEqual({
+      name: "a",
+      description: "Stop and check this skill before finishing.",
+      license: "Complete terms in LICENSE.txt",
+    });
+
+    expect(
+      parseFrontmatter("---\nname: a\ndescription: |-\n  Reference for the API.\n  TRIGGER when needed.\n---\n"),
+    ).toEqual({
+      name: "a",
+      description: "Reference for the API.\nTRIGGER when needed.",
+    });
+  });
+
+  it("skips nested maps such as metadata, which it does not need", () => {
+    expect(
+      parseFrontmatter("---\nname: a\nmetadata:\n  author: example-org\n  version: \"1.0\"\ndescription: x\n---\n"),
+    ).toEqual({
+      name: "a",
+      metadata: "",
+      description: "x",
+    });
+  });
+
   it("refuses what it does not understand instead of guessing", () => {
     // 没有 frontmatter
     expect(parseFrontmatter("# 只有正文\n")).toBeUndefined();
     // 没有结束的 ---
     expect(parseFrontmatter("---\nname: a\n")).toBeUndefined();
-    // YAML 多行值
-    expect(parseFrontmatter("---\nname: a\ndescription: >\n  第一行\n---\n")).toBeUndefined();
+    // 第一行就缩进：不知道属于谁
+    expect(parseFrontmatter("---\n  name: a\n---\n")).toBeUndefined();
+    // 顶层的一行文字，不是 key: value
+    expect(parseFrontmatter("---\nname: a\njust some text\n---\n")).toBeUndefined();
   });
 });
 
