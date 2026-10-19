@@ -1206,7 +1206,19 @@ function printLastUserMessage(
 }
 
 
+let debug = false;
+
 const replCommands: ReplCommand[] = [
+  {
+    names: ["/debug"],
+    description: "切换诊断日志显示",
+    run() {
+      debug = !debug;
+      view.setDebug(debug);
+      view.info(`诊断日志：${debug ? "已开启" : "已关闭"}。`);
+      return "continue";
+    },
+  },
   {
     names: ["/help"],
     description: "显示这份命令列表",

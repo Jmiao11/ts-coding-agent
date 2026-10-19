@@ -85,6 +85,8 @@ export function createPlainView(
       output.write(`${text}\n`);
     },
 
+    setDebug() {},
+
     toolOutput(title, text) {
       output.write(`\n----- ${title} output -----\n${text}\n------------------------------\n\n`);
     },

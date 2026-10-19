@@ -94,6 +94,7 @@ export function createTuiView(
   let answer: Markdown | undefined;
   let answerText = "";
   let stopped = false;
+  let debug = false;
   const runningTools = new Map<string, { line: Text; label: string }>();
 
   function show(text: string): void {
@@ -165,7 +166,13 @@ export function createTuiView(
     },
 
     log(text) {
-      show(dim(text));
+      if (debug) {
+        show(dim(text));
+      }
+    },
+
+    setDebug(enabled) {
+      debug = enabled;
     },
 
     toolOutput(title, text) {

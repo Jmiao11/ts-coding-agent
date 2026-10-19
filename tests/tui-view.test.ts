@@ -1,3 +1,7 @@
+import { PassThrough } from "node:stream";
+
+import { createPlainView } from "../src/ui/plain-view.js";
+
 import {
   describe,
   expect,
@@ -169,15 +173,39 @@ describe("tui view", () => {
     view.close();
   });
 
-  it("renders diagnostic logs in dim text", async () => {
+  it("only renders new diagnostic logs when debug is enabled", async () => {
     const { terminal, view } = setup();
 
+    view.log("hidden-by-default");
+    await settle();
+    expect(terminal.text()).not.toContain("hidden-by-default");
+
+    view.setDebug(true);
     view.log("[context] est=12 threshold=100");
     await settle();
 
     expect(terminal.text()).toContain("[context] est=12 threshold=100");
     expect(terminal.written).toContain("\x1b[2m");
+    view.setDebug(false);
+    view.log("hidden-after-toggle");
+    await settle();
+    expect(terminal.text()).not.toContain("hidden-after-toggle");
     view.close();
+  });
+
+  it("keeps plain logs identical to info regardless of debug", () => {
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk) => { written += String(chunk); });
+    const view = createPlainView({ output });
+
+    view.info("same text");
+    view.setDebug(false);
+    view.log("same text");
+    view.setDebug(true);
+    view.log("same text");
+
+    expect(written).toBe("same text\nsame text\nsame text\n");
   });
 
   it("renders info lines and a streamed answer into the history above the editor", async () => {
