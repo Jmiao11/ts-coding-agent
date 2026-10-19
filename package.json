@@ -15,7 +15,6 @@
   "engines": {
     "node": ">=24"
   },
-
   "bin": {
     "ts-coding-agent": "dist/cli.js"
   },
@@ -41,5 +40,8 @@
   },
   "dependencies": {
     "typebox": "^1.3.34"
+  },
+  "optionalDependencies": {
+    "@microsoft/mxc-sdk": "1.0.0"
   }
 }
