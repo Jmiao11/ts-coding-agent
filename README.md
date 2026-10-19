@@ -112,6 +112,8 @@ flowchart TB
 - **压缩不删除原始 Session 历史**：模型使用压缩视图；会话文件保留追加记录及检查点，方便恢复。
 - **命令审批不等于沙箱**：文件工具有工作区和敏感路径保护，但 `run_command` 仍可能访问工作区外的文件。
 
+**AgentView 界面层**：`cli.ts` 只通过 `AgentView` 和界面打交道，`PlainView` 与 `TuiView` 是它的两个实现。工具状态和工具输出来自结构化的 Agent 事件，由 `tool-activity.ts` 按调用 ID 转交给 view；CLI 不解析日志文字来判断工具的状态。
+
 ### 核心代码位置
 
 | 模块 | 主要文件 | 职责 |
@@ -124,6 +126,10 @@ flowchart TB
 | Sessions | `src/session/session-store.ts` | JSONL 追加记录、会话列表与恢复 |
 | Undo | `src/checkpoint/` | 文件改动记录、冲突检测、任务级撤销 |
 | CLI | `src/cli.ts` | 参数、交互命令、会话选择、日志与中止处理 |
+| UI 接口 | `src/ui/agent-view.ts` | `AgentView`：输出、输入、审批、中止与界面生命周期 |
+| UI 实现 | `src/ui/plain-view.ts`、`src/ui/tui-view.ts` | 普通终端与基于 pi-tui 1.3.0 的实验性全屏界面 |
+| UI 事件适配 | `src/ui/answer-stream.ts`、`src/ui/tool-activity.ts` | 流式回答、结构化工具事件转为 view 调用 |
+| UI 展示组件 | `src/ui/tool-group.ts`、`src/ui/status-text.ts` | 工具活动分组、审批记录、详情折叠与 Token 数格式化 |
 
 ## 🧰 技术栈
 
@@ -227,6 +233,26 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 
 > `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。`package.json` 中的二进制名是 `ts-coding-agent`，但本版本尚未提供公开的全局安装渠道。
 
+## 交互界面
+
+默认使用普通终端，逐行输出全部诊断日志。加 `--tui` 可启用实验性的全屏界面；它要求标准输入和标准输出都是 TTY，不能通过管道或重定向运行。
+
+```powershell
+node dist/cli.js --tui --workspace <Git工作区>
+```
+
+TUI 以 `❯` 显示你提交的任务，以 `●` 显示 Agent 的回答。工具调用按任务分组，成功的工具输出默认收起；失败的工具和你审批过的命令始终显示。等待审批时，问题显示在工具组内；回答后保留“你允许了 / 你拒绝了”的记录。底栏显示工作区、模型、沙箱与累计 Token 用量。
+
+| 按键 / 命令 | 行为 |
+| --- | --- |
+| Enter | 发送输入框中的任务 |
+| Ctrl+C | 任务运行中中止当前任务；在输入框等待任务时退出；审批时中止任务并拒绝命令。任务中连按两次可强制退出 |
+| Ctrl+D | 输入框为空时退出 |
+| Ctrl+O | 展开或收起最近一组工具调用；输入框有文字或正在等待审批时也可使用，不会改变输入或回答审批 |
+| y | 审批时允许命令；其他按键视为拒绝（Ctrl+O 只切换详情） |
+| `/debug` | TUI 中切换诊断日志，新日志以暗色显示；普通终端始终显示诊断日志，开关无效 |
+| `/help` | 查看交互命令及界面快捷键 |
+
 ## Sandboxes
 
 用 `--sandbox` 选择 `run_command` 的执行后端：
@@ -284,9 +310,9 @@ pnpm typecheck
 pnpm build
 ```
 
-**当前本地回归结果（Windows）**：`pnpm test` 的 **26 个测试文件通过，130 项测试通过、1 项跳过**，`pnpm typecheck` 通过。这是本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **31 个测试文件通过，186 项测试通过、1 项跳过**，`pnpm typecheck` 通过。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
-测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销与部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
+测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
 ## ⚠️ 范围与已知限制
 
@@ -295,7 +321,10 @@ pnpm build
 - **`/undo` 不是 Git 级回滚**：只跟踪 `write_file` / `edit_file`，不能保证撤销 `run_command` 的文件副作用，也不会重写暂存区或提交历史。
 - **会话记录包含上下文**：JSONL 可能保留模型读取过的代码及工具输出，不应把本地会话文件当作可以直接公开的日志。
 - **模型适配范围有限**：当前主要验证 OpenAI-compatible Chat Completions 与 DeepSeek thinking disabled；未实现所有 Provider 的专有协议与 reasoning 透传。
-- **CLI 仍是纯文本 REPL**：暂无完整 TUI、对话树 `/tree`、通用权限模式或多 Agent 编排；终端不支持多行粘贴等复杂编辑体验。
+- **交互功能范围有限**：已提供普通终端与实验性的 `--tui`；尚未实现对话树 `/tree`、通用权限模式或多 Agent 编排。
+- **TUI 仅在 Windows PowerShell 7 上实测过**：其他终端及平台的显示、输入与退出清理仍待验证。
+- **Ctrl+O 只能切换最近一组工具调用**：修改已经滚进回滚区的内容会导致 pi-tui 清屏重画，因此不支持展开更早的组。
+- **`/debug` 不会删除历史日志**：关闭之后，已经显示的诊断日志不会消失，只隐藏后续新日志。
 - **上下文溢出恢复有限**：已支持阈值压缩及总结截断重试，但尚未对全部 Provider 的硬性 context-overflow 错误实现自动恢复。
 - **跨平台仍待验证**：主要开发与本地回归在 Windows 完成，Linux/macOS 使用前请自行验证，后续将补充 CI 和干净环境验收。
 
@@ -305,7 +334,6 @@ pnpm build
 | --- | --- |
 | v0.1.0 Preview | 源码运行、Agent Loop、工具、上下文压缩、Session、`/undo` |
 | 后续版本 | 非 Git 目录信任机制、全局 CLI 安装体验、权限模式 |
-| v0.2.0 候选 | 更完善的终端 TUI 与使用体验 |
 | 长期探索 | 沙箱执行、对话分支恢复、更多模型接口与安全边界 |
 
 路线是计划，不代表已实现或承诺发布日期。
