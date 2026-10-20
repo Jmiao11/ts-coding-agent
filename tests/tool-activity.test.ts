@@ -35,6 +35,11 @@ describe("describeToolCall", () => {
     expect(describeToolCall("run_command", { command: "  echo\tfirst\nsecond  " })).toBe("echo first second");
   });
 
+  it("summarizes the first string argument of an MCP tool", () => {
+    expect(describeToolCall("mcp__server__echo", { count: 2, text: "  hello\nworld  " })).toBe("hello world");
+    expect(describeToolCall("mcp__server__echo", { text: "x".repeat(80) })).toBe(`${"x".repeat(59)}…`);
+  });
+
   it("returns no summary for unknown tools or odd arguments", () => {
     expect(describeToolCall("mystery_tool", { foo: "bar" })).toBe("");
     expect(describeToolCall("read_file", null)).toBe("");

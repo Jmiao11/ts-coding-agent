@@ -19,7 +19,7 @@ describe("connectMcpServer", () => {
   it("discovers tools with JSON Schema and calls them", async () => {
     const connection = await connect();
     expect(connection.serverInfo).toEqual({ name: "mcp-test-server", version: "1.0.0" });
-    expect(connection.tools.map((tool) => tool.name)).toEqual(["echo", "fail", "slow", "print_env"]);
+    expect(connection.tools.map((tool) => tool.name)).toEqual(["echo", "fail", "slow", "print_env", "image", "big", "structured", "bad.name!"]);
     expect(connection.tools.find((tool) => tool.name === "echo")?.inputSchema).toMatchObject({
       type: "object",
       properties: { text: { type: "string" } },

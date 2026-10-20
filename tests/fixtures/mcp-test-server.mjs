@@ -13,5 +13,13 @@ server.registerTool("slow", { description: "Wait ten seconds" }, async () => {
   return text("done");
 });
 server.registerTool("print_env", { description: "Read an environment variable", inputSchema: z.object({ name: z.string() }) }, ({ name }) => text(process.env[name] ?? ""));
+server.registerTool("image", { description: "Return a tiny PNG" }, () => ({ content: [{
+  type: "image",
+  mimeType: "image/png",
+  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+}] }));
+server.registerTool("big", { description: "Return long text" }, () => text("x".repeat(60_000)));
+server.registerTool("structured", { description: "Return structured data" }, () => ({ content: [], structuredContent: { answer: 42 } }));
+server.registerTool("bad.name!", { description: "Name needs sanitizing" }, () => text("renamed"));
 
 await server.connect(new StdioServerTransport());

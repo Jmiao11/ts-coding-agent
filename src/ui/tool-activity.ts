@@ -22,18 +22,21 @@ const SUMMARY_ARGUMENT: Record<string, string> = {
 const MAX_SUMMARY_LENGTH = 60;
 
 
-/** 只提取工具的主要参数，压成一行；未知工具或参数不猜测。 */
+/** 已知工具取主要参数，MCP 工具取首个字符串参数，压成一行。 */
 export function describeToolCall(
   toolName: string,
   args: unknown,
 ): string {
   const key = Object.hasOwn(SUMMARY_ARGUMENT, toolName) ? SUMMARY_ARGUMENT[toolName] : undefined;
 
-  if (key === undefined || typeof args !== "object" || args === null) {
+  if (typeof args !== "object" || args === null) {
     return "";
   }
 
-  const value = (args as Record<string, unknown>)[key];
+  const values = args as Record<string, unknown>;
+  const value = key === undefined && toolName.startsWith("mcp__")
+    ? Object.values(values).find((item) => typeof item === "string")
+    : key === undefined ? undefined : values[key];
 
   if (typeof value !== "string") {
     return "";
