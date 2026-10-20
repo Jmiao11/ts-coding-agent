@@ -37,3 +37,9 @@ SOFTWARE.
 - 来源：https://github.com/anthropics/skills ，commit dbd4588f9e1033efb41dad4bef2f7947c8993d44
 - 位置：.agent/skills/mcp-builder/、.agent/skills/frontend-design/（未修改）
 - 许可证：Apache License 2.0，全文见各目录下的 LICENSE.txt
+
+## Model Context Protocol TypeScript SDK
+
+- 依赖：`@modelcontextprotocol/client` 2.3.1；测试用开发依赖：`@modelcontextprotocol/server` 2.3.1
+- 来源：https://github.com/modelcontextprotocol/typescript-sdk
+- 两个已安装包的 `package.json` 均标注 Apache-2.0；随包提供的 LICENSE 还说明了项目从 MIT 向 Apache-2.0 过渡期间的许可情况。

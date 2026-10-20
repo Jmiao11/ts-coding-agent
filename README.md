@@ -94,8 +94,14 @@ flowchart TB
 
     L --> H["ExtensionHost · Lifecycle Hooks"]
     H --> B["Budget · Command Approval · Logger"]
-    H --> T["6 个 Coding Tools"]
+    H --> T["内置工具"]
+    H --> MT["MCP 适配层"]
     T --> L
+    MT --> L
+    MT --> MC["MCP Client"]
+    MC <-->|stdio| MS["MCP server · 本机进程"]
+    SK["Skill 目录 · .agent/skills/"] --> SP["System prompt · Skill 名称、描述、路径"]
+    SP --> L
 
     A --> E["Agent Events · subscribe"]
     E --> S[("JSONL Session")]
@@ -122,10 +128,13 @@ flowchart TB
 | Model Provider | `src/ai/providers/openai-compatible.ts`、`event-stream.ts` | 请求适配、SSE 解析、事件流 |
 | Context | `src/context/compaction.ts`、`token-estimate.ts` | Token 预算、上下文视图与压缩 |
 | Tools | `src/tools/` | 文件读写、目录查看、搜索、命令执行与路径约束 |
+| Skills | `src/skills/` | 扫描与校验 Skill 目录、控制是否注入提示词 |
+| MCP | `src/mcp/` | 配置与信任、stdio 连接、工具适配和调用审批 |
 | Extensions | `src/extensions/`、`src/agent/extension-host.ts` | 预算、命令确认和 Hook 调度 |
 | Sessions | `src/session/session-store.ts` | JSONL 追加记录、会话列表与恢复 |
 | Undo | `src/checkpoint/` | 文件改动记录、冲突检测、任务级撤销 |
 | CLI | `src/cli.ts` | 参数、交互命令、会话选择、日志与中止处理 |
+| UI | `src/ui/` | 普通终端与 TUI 的共同界面、工具活动展示 |
 | UI 接口 | `src/ui/agent-view.ts` | `AgentView`：输出、输入、审批、中止与界面生命周期 |
 | UI 实现 | `src/ui/plain-view.ts`、`src/ui/tui-view.ts` | 普通终端与基于 pi-tui 1.3.0 的实验性全屏界面 |
 | UI 事件适配 | `src/ui/answer-stream.ts`、`src/ui/tool-activity.ts` | 流式回答、结构化工具事件转为 view 调用 |
@@ -223,11 +232,14 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 | `node dist/cli.js -c` | 继续当前工作区最近一次会话 |
 | `node dist/cli.js -r` | 从当前工作区的会话列表中选择 |
 | `node dist/cli.js --session <id>` | 通过会话 ID 前缀恢复 |
+| `node dist/cli.js --no-skills` | 不扫描或注入工作区 Skills |
+| `node dist/cli.js --no-mcp` | 不加载 MCP 配置或工具 |
 | `/help` | 查看 REPL 内命令 |
 | `/new` | 新建会话 |
 | `/resume` | 选择和恢复会话 |
 | `/compact [要求]` | 手动压缩上下文；保留最近消息 |
 | `/session` | 查看当前会话及上下文使用情况 |
+| `/mcp` | 查看 MCP server 状态及工具名 |
 | `/undo` | 撤销最近一次符合条件的文件工具改动 |
 | `/exit` | 退出交互模式 |
 
@@ -252,6 +264,50 @@ TUI 以 `❯` 显示你提交的任务，以 `●` 显示 Agent 的回答。工�
 | y | 审批时允许命令；其他按键视为拒绝（Ctrl+O 只切换详情） |
 | `/debug` | TUI 中切换诊断日志，新日志以暗色显示；普通终端始终显示诊断日志，开关无效 |
 | `/help` | 查看交互命令及界面快捷键 |
+
+## Skills
+
+工作区中的 Skill 放在 `.agent/skills/<name>/SKILL.md`，遵循 [Agent Skills 规范](https://agentskills.io/specification)。文件的 YAML frontmatter 必须有 `name` 和 `description`；`name` 要与所在目录名一致。格式不符合要求的 Skill 会被跳过并给出警告，不会阻止 Agent 启动。
+
+Skills 使用渐进式披露：启动时，system prompt 只列出每个 Skill 的名称、描述和路径；模型判断需要时，再调用 `read_file` 读取 `SKILL.md` 全文。没有 Skill 时，system prompt 与此前逐字节相同；`--no-skills` 可关闭目录扫描和提示词注入。本仓库附带来自 `anthropics/skills` 的 `mcp-builder` 和 `frontend-design`，其许可为 Apache-2.0，见 [第三方声明](THIRD_PARTY_NOTICES.md)。校验器遵守规范中的 description 长度上限：超过 1024 个字符的 Skill 会被跳过。
+
+触发评测可在完成构建并配置模型 API 后运行 `node scripts/eval-skills.mjs --repeat 2`。题目在 [evals/skills.json](evals/skills.json)，包括隐式触发题和不该读取 Skill 的陷阱题；脚本从会话 JSONL 中统计工具调用与 Token 用量。修改提示词前，触发判断为 **21/24**，其中 j 题两次都未读取 `mcp-builder`，记录显示模型认为自己已经会了；按评测结果修改提示词后，独立抽查 j、g、l 为 **3/3**，每题只运行一次，样本很小。命令、逐题输出和解释见 [触发与 A/B 记录](evals/skills-k4c-run-2026-10-19.md)，较早的一轮见 [首次触发记录](evals/skills-run-2026-10-19.md)。
+
+旧 A/B 的 `--no-skills` 对照组被污染：模型通过 `list_directory` 等文件工具自行找到了 Skill 并读取。因此目前不能据此得出回答质量或 Token 节省方面的结论；已有记录显示，读取 Skill 的一侧输入 Token 增加，但差额还包含后续工具调用的影响。Skill 与仓库中的其他文件一样作为可读取的上下文，不能覆盖 system prompt 中的规则。
+
+## MCP
+
+目前只支持本机 **stdio** MCP server，客户端依赖官方 `@modelcontextprotocol/client` **2.3.1**；尚不支持远程 HTTP、OAuth，以及 MCP resources 和 prompts 接口。server 暴露的工具会适配成 Agent 工具，名字为 `mcp__<server>__<tool>`。启动时显示各 server 的工具数与按工具定义长度估算的 Token 数；REPL 中用 `/mcp` 查看连接、失败或跳过状态和工具名，用 `--no-mcp` 完全关闭 MCP 配置加载。
+
+用户级配置是 `~/.agent-harness/mcp.json`，项目级配置是工作区根目录的 `.mcp.json`；两者都使用 `mcpServers`。同名时用户级配置优先，并给出警告。例如 Windows 上的 filesystem server：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "F:\\mcp-probe"],
+      "env": {},
+      "cwd": "F:\\mcp-probe",
+      "tools": ["list_directory", "read_text_file", "write_file"],
+      "autoApprove": ["list_directory", "read_text_file"]
+    }
+  }
+}
+```
+
+`command` 是可执行程序；`args` 是传给它的参数；`env` 是额外传给 server 的环境变量，可用 `${VAR}` 从启动 Agent 的宿主机环境取值，缺少变量时会跳过该 server 并警告；`cwd` 是 server 的工作目录，省略时使用工作区根目录；`tools` 是允许暴露给 Agent 的**原始工具名**列表，省略时启用全部；`autoApprove` 是无需逐次审批的原始工具名列表，省略时不自动批准。示例中的只读工具免审批，`write_file` 仍需审批。
+
+项目级 server 首次启动前需要交互确认。信任记录保存在 `~/.agent-harness/mcp-trust.json`，按工作区路径、server 名及 command、args、env **键名**、cwd 的哈希识别配置，不记录 env 的值；命令等内容改变后会重新询问信任。一次性任务模式或没有 TTY 时，未获信任的项目级 server 会直接跳过并给出警告。所有 MCP 工具调用默认都要审批，只有用户在 `autoApprove` 中明确列出的工具例外。
+
+### 安全边界
+
+- MCP server 是本机进程，**不受 `--sandbox` 隔离**。
+- MCP 工具可绕过 `/undo` 的文件快照，以及内置文件工具对工作区和 `.env` 的保护；对这类调用，逐次审批或用户明确配置的 `autoApprove` 是现有防线。只给可信 server 配置自动批准。
+- MCP 返回结果在 system prompt 中被要求当作数据，而不是指令；这只是提示词层面的约束，**不是强制保证**。
+- server 默认只收到 SDK 白名单内的宿主环境变量，以及配置中明确写出的 `env`，不会继承完整的进程环境。
+
+连接失败只会给出警告，Agent 继续启动：缺少 MCP 工具不会降低已有工具的安全边界；选定的沙箱若启动失败则必须拒绝运行，以免命令落到本机执行。本仓库 `package.json` 的 `devEngines` 要求使用 pnpm；在仓库目录里用 `npx` 启动 server 会被 npm 拒绝。可像上例那样把 `cwd` 设为仓库外的英文路径。
 
 ## Sandboxes
 
@@ -310,9 +366,9 @@ pnpm typecheck
 pnpm build
 ```
 
-**当前本地回归结果（Windows）**：`pnpm test` 的 **31 个测试文件通过，186 项测试通过、1 项跳过**，`pnpm typecheck` 通过。这是本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **40 个测试文件通过，238 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
-测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
+测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、Skills、MCP、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
 ## ⚠️ 范围与已知限制
 
@@ -332,9 +388,9 @@ pnpm build
 
 | 阶段 | 方向 |
 | --- | --- |
-| v0.1.0 Preview | 源码运行、Agent Loop、工具、上下文压缩、Session、`/undo` |
-| 后续版本 | 非 Git 目录信任机制、全局 CLI 安装体验、权限模式 |
-| 长期探索 | 沙箱执行、对话分支恢复、更多模型接口与安全边界 |
+| 已完成 | v0.1.0 Preview 的源码运行、Agent Loop、工具、上下文压缩、Session、`/undo`；TUI、Skills、stdio MCP 接入与审批 |
+| 下一步：Beta 发布 | npm 包发布；检查可选依赖对安装体积的影响 |
+| 长期探索 | 对话分支恢复、更多模型接口与安全边界 |
 
 路线是计划，不代表已实现或承诺发布日期。
 
