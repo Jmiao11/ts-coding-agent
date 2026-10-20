@@ -12,9 +12,9 @@ function assertInside(parent: string, target: string): void {
 
 /** 只改变临时 worktree；主工作区的 dist、依赖和 skills 不受影响。 */
 export async function withSkillFreeWorktree<T>(workspace: string, run: (root: string) => Promise<T>): Promise<T> {
-  const temporaryRoot = realpathSync(tmpdir());
+  const temporaryRoot = realpathSync.native(tmpdir());
   if (/[^\x00-\x7f]/.test(temporaryRoot)) throw new Error("Skill evaluation requires an ASCII TEMP/TMP directory");
-  const parent = mkdtempSync(join(temporaryRoot, "agent-skill-ab-"));
+  const parent = realpathSync.native(mkdtempSync(join(temporaryRoot, "agent-skill-ab-")));
   const checkout = resolve(parent, "workspace");
   const git = (args: string[]) => execFileSync("git", ["-C", workspace, ...args], {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
@@ -28,15 +28,17 @@ export async function withSkillFreeWorktree<T>(workspace: string, run: (root: st
     }
     return await run(checkout);
   } finally {
-    // 即使 add 部分失败，也查询 Git 的登记，不能只看目录是否存在。
-    const registered = git(["worktree", "list", "--porcelain", "-z"]).split("\0")
-      .filter((entry) => entry.startsWith("worktree "))
-      .some((entry) => {
-        const path = resolve(entry.slice("worktree ".length));
-        return process.platform === "win32" ? path.toLowerCase() === checkout.toLowerCase() : path === checkout;
-      });
-    if (registered) git(["worktree", "remove", "--force", checkout]);
-    assertInside(temporaryRoot, resolve(parent));
-    rmSync(parent, { recursive: true, force: true });
+    try {
+      try {
+        git(["worktree", "remove", "--force", checkout]);
+      } catch (error) {
+        const failure = error as { status?: number | null; stderr?: string };
+        console.warn(`git worktree remove failed (exit ${failure.status}): ${failure.stderr ?? error}`);
+      }
+      git(["worktree", "prune"]);
+    } finally {
+      assertInside(temporaryRoot, resolve(parent));
+      rmSync(parent, { recursive: true, force: true });
+    }
   }
 }
