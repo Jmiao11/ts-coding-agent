@@ -69,3 +69,25 @@ k | 有 skill: tools 8.5 | in 32572.5 / out 1934.5 (2/2 完成) | 无 skill: too
 - “有 skill / 无 skill”表示是否开启目录扫描和提示词注入，不表示实际有没有读 skill。禁用侧的 i #1、i #2 仍通过仓库搜索发现并发起读取 mcp-builder；k #2 也发起读取 frontend-design。这几次不能当作完全不使用 skill 的对照。
 - 两轮数据不足以证明稳定的效率或质量差异。Token 为主会话累计输入/输出，不能直接等同于总费用；回答质量留给人工比较。
 
+## 结论与限制
+
+- 改提示词之前，触发正确 21/24；j 两次都没读 mcp-builder，模型觉得自己会就直接回答了。提示词改动已在 `dd54454` 中完成；2026-10-20 按修改后的提示词独立抽查：j 读了 mcp-builder，g 和 l 均未读 skill，三题都正确，每题样本只有 1 次，不能据此推断稳定命中率。
+- 这份旧 A/B 的对照组被污染了：`--no-skills` 侧的模型通过 `list_directory`、`search_text` 发现了 `.agent/skills` 并自行读取 skill（i 两次、k 一次）。所以这次的 A/B 数据不能用来说明 skill 提升了质量或者节省了 token。
+- 以后重新做 A/B，对照组应该在一个删掉了 `.agent/skills` 的临时 git worktree 中运行，同时传入 `--no-skills`。该隔离方式已在 `420b207` 中实现；本次只做抽查，没有重新运行 A/B。
+- 已观察到读 skill 的一侧输入 token 增加：旧 A/B 中，d 是约 9.4k 对 1.8k，j 是约 32.7k 对 1.9k。这些数值也包含后续工具调用的影响，不能把全部差额都归因于 skill 正文本身。
+
+抽查命令：`pnpm build` 后运行 `node scripts/eval-skills.mjs --only j,g,l --repeat 1`。以下仅将结果文件路径改为仓库相对路径；未合并已中止的全量评测数据。
+
+```text
+g #1 | skills: (none) | 对 | tools: 0 | in 2185 / out 93
+j #1 | skills: mcp-builder | 对 | tools: 9 | in 58483 / out 1910
+l #1 | skills: (none) | 对 | tools: 4 | in 14913 / out 1545
+触发正确 3/3
+该读时读到 1/1
+不该读时没读 2/2
+平均 tokens（读了 skill，1 次）：in 58483.0 / out 1910.0 / total 60393.0
+平均 tokens（没读 skill，2 次）：in 8549.0 / out 819.0 / total 9368.0
+结果：evals/results/2026-10-20T01-24-57-995Z.json
+```
+
+
