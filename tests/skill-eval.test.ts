@@ -6,6 +6,7 @@ import {
   summarizeSkillEvals,
   summarizeSkillMetrics,
   summarizeSkillAB,
+  skillControlContaminated,
   type SkillEvalObservation,
 } from "../src/skills/skill-eval.js";
 
@@ -66,7 +67,7 @@ describe("skill trigger evaluation", () => {
 
 describe("skill A/B summaries", () => {
   it("averages each case and variant separately without scoring answers", () => {
-    const run = { id: "a", noSkills: false, toolCalls: 2, input: 100, output: 20, exitCode: 0 };
+    const run = { id: "a", noSkills: false, skills: [], toolCalls: 2, input: 100, output: 20, exitCode: 0 };
     const summary = summarizeSkillAB([
       run,
       { ...run, toolCalls: 4, input: 300, output: 40 },
@@ -76,12 +77,24 @@ describe("skill A/B summaries", () => {
     ]);
     expect(summary).toEqual([
       { id: "a",
-        withSkills: { runs: 2, completed: 2, toolCalls: 3, input: 200, output: 30 },
-        withoutSkills: { runs: 2, completed: 2, toolCalls: 2, input: 100, output: 20 } },
+        withSkills: { contaminated: 0, runs: 2, completed: 2, toolCalls: 3, input: 200, output: 30 },
+        withoutSkills: { contaminated: 0, runs: 2, completed: 2, toolCalls: 2, input: 100, output: 20 } },
       { id: "b",
-        withSkills: { runs: 1, completed: 1, toolCalls: 2, input: 900, output: 20 },
-        withoutSkills: { runs: 0, completed: 0, toolCalls: null, input: null, output: null } },
+        withSkills: { contaminated: 0, runs: 1, completed: 1, toolCalls: 2, input: 900, output: 20 },
+        withoutSkills: { contaminated: 0, runs: 0, completed: 0, toolCalls: null, input: null, output: null } },
     ]);
+  });
+
+  it("quarantines only skill-reading controls and reports their count", () => {
+    const run = { id: "a", noSkills: true, skills: [], toolCalls: 2, input: 100, output: 20, exitCode: 0 };
+    const contaminated = { ...run, skills: ["mcp-builder"], input: 9000 };
+    expect(skillControlContaminated(contaminated)).toBe(true);
+    expect(skillControlContaminated({ ...contaminated, noSkills: false })).toBe(false);
+    const [summary] = summarizeSkillAB([run, contaminated, { ...contaminated, noSkills: false }]);
+    expect(summary?.withoutSkills).toEqual({ runs: 2, completed: 1, contaminated: 1, toolCalls: 2, input: 100, output: 20 });
+    expect(summary?.withSkills).toEqual({ runs: 1, completed: 1, contaminated: 0, toolCalls: 2, input: 9000, output: 20 });
+    expect(summarizeSkillAB([contaminated])[0]?.withoutSkills)
+      .toEqual({ runs: 1, completed: 0, contaminated: 1, toolCalls: null, input: null, output: null });
   });
 
   it("retains failed counts and excludes them from averages", () => {

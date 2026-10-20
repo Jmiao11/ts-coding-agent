@@ -9,7 +9,8 @@ import { parseArgs } from "node:util";
 
 import { getSessionDir, listSessions, loadSession, rebuildSession } from "../dist/session/session-store.js";
 import { skillReadBy } from "../dist/skills/skill-usage.js";
-import { skillEvalPassed, summarizeSkillEvals, summarizeSkillMetrics, summarizeSkillAB } from "../dist/skills/skill-eval.js";
+import { skillEvalPassed, summarizeSkillEvals, summarizeSkillMetrics, summarizeSkillAB, skillControlContaminated } from "../dist/skills/skill-eval.js";
+import { withSkillFreeWorktree } from "../dist/skills/skill-eval-worktree.js";
 
 const { values } = parseArgs({ options: {
   workspace: { type: "string" }, repeat: { type: "string", default: "2" }, only: { type: "string" },
@@ -27,7 +28,6 @@ for (const id of ids ?? []) {
 const cases = allCases.filter((item) => (!ids || ids.includes(item.id)) && (!values.ab || item.expectSkill !== null));
 if (cases.length === 0) throw new Error("No eligible cases selected");
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const sessionDir = getSessionDir(workspace);
 const startedAt = new Date().toISOString();
 const resultsDir = fileURLToPath(new URL("../evals/results/", import.meta.url));
 mkdirSync(resultsDir, { recursive: true });
@@ -44,6 +44,7 @@ function save() {
   writeFileSync(resultsPath, JSON.stringify({ startedAt, workspace, repeat, mode, results, summary: summarize() }, null, 2) + "\n");
   if (!values.ab) return;
   const markdown = ["# Skill A/B：最终回答", "", "每次运行都是独立的新会话；奇数轮先有 skill，偶数轮先无 skill。不让模型打分。", ""];
+  markdown.push("无 skill 侧在删除 .agent/skills 的临时 worktree 中运行，同时传 --no-skills；污染运行不计入均值。", "");
   for (const item of cases) {
     markdown.push(`## ${item.id}`, "", item.prompt, "", "| 轮次 | 有 skill | 无 skill |", "| --- | --- | --- |");
     for (let iteration = 1; iteration <= repeat; iteration += 1) {
@@ -51,7 +52,8 @@ function save() {
         const result = results.find((entry) => entry.id === item.id && entry.iteration === iteration && entry.noSkills === noSkills);
         if (!result) return "（未运行）";
         const status = result.error || result.exitCode !== 0 ? `运行失败（${result.error ?? result.exitCode}）\n` : "";
-        return cell(status + (result.answer || "（最终 assistant 消息没有文字）"));
+        const contamination = result.contaminated ? "对照组被污染（不计入平均值）\n" : "";
+        return cell(contamination + status + (result.answer || "（最终 assistant 消息没有文字）"));
       };
       markdown.push(`| ${iteration} | ${answer(false)} | ${answer(true)} |`);
     }
@@ -61,22 +63,23 @@ function save() {
 }
 writeFileSync(resultsPath, "{}\n", { flag: "wx" });
 
-function runCli(prompt, noSkills) {
+function runCli(prompt, noSkills, runWorkspace) {
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [cli, "--workspace", workspace, ...(noSkills ? ["--no-skills"] : []), prompt], {
-      cwd: workspace, stdio: ["ignore", "ignore", "ignore"], windowsHide: true,
+    const child = spawn(process.execPath, [cli, "--workspace", runWorkspace, ...(noSkills ? ["--no-skills"] : []), prompt], {
+      cwd: runWorkspace, stdio: ["ignore", "ignore", "ignore"], windowsHide: true,
     });
     child.once("error", (error) => resolveRun({ exitCode: null, error: `spawn-${error.code ?? "error"}` }));
     child.once("exit", (exitCode, signal) => resolveRun({ exitCode, ...(signal ? { error: `signal-${signal}` } : {}) }));
   });
 }
 
-async function runCase(item, iteration, noSkills) {
+async function runCase(item, iteration, noSkills, runWorkspace = workspace) {
+  const sessionDir = getSessionDir(runWorkspace);
   const before = new Set(listSessions(sessionDir).map((session) => session.path));
-  const outcome = await runCli(item.prompt, noSkills);
+  const outcome = await runCli(item.prompt, noSkills, runWorkspace);
   const result = {
     id: item.id, iteration, noSkills, expectSkill: item.expectSkill, skills: [], toolCalls: 0,
-    input: 0, output: 0, ...outcome,
+    input: 0, output: 0, workspace: runWorkspace, ...outcome,
   };
   try {
     const created = listSessions(sessionDir).filter((session) => !before.has(session.path)
@@ -115,6 +118,7 @@ async function runCase(item, iteration, noSkills) {
     result.error = error.message;
   }
   if (!values.ab && !values["no-skills"]) result.correct = skillEvalPassed(result);
+  if (values.ab) result.contaminated = skillControlContaminated(result);
   results.push(result);
   save();
   return result;
@@ -122,13 +126,15 @@ async function runCase(item, iteration, noSkills) {
 
 const mean = (number) => number === null ? "n/a" : number.toFixed(1);
 const metrics = (group) => `tools ${mean(group.toolCalls)} | in ${mean(group.input)} / out ${mean(group.output)}`
-  + ` (${group.completed}/${group.runs} 完成)`;
+  + ` (${group.completed}/${group.runs} 纳入${"contaminated" in group ? `，污染 ${group.contaminated}` : ""})`;
 for (const item of cases) {
   for (let iteration = 1; iteration <= repeat; iteration += 1) {
     // 对调先后顺序，避免每轮都固定先运行同一边。
     const variants = values.ab ? (iteration % 2 === 1 ? [false, true] : [true, false]) : [values["no-skills"]];
     for (const noSkills of variants) {
-      const result = await runCase(item, iteration, noSkills);
+      const result = values.ab && noSkills
+        ? await withSkillFreeWorktree(workspace, (root) => runCase(item, iteration, true, root))
+        : await runCase(item, iteration, noSkills);
       if (values.ab) continue;
       console.log(`${result.id} #${iteration}`
         + (values["no-skills"] ? " | no-skills" : ` | skills: ${result.skills.join(", ") || "(none)"} | ${result.correct ? "对" : "错"}`)
@@ -144,6 +150,7 @@ for (const item of cases) {
 
 const summary = summarize();
 if (values.ab) {
+  console.log(`对照组被污染 ${results.filter((result) => result.contaminated).length}/${results.filter((result) => result.noSkills).length}`);
   console.log(`回答对比：${answersPath}`);
 } else if (values["no-skills"]) {
   console.log(`平均（no-skills）：${metrics(summary)}`);
@@ -157,5 +164,5 @@ if (values.ab) {
 }
 console.log(`结果：${resultsPath}`);
 process.exitCode = (values.ab || values["no-skills"])
-  ? (results.every((result) => result.exitCode === 0 && !result.error) ? 0 : 1)
+  ? (results.every((result) => result.exitCode === 0 && !result.error && !result.contaminated) ? 0 : 1)
   : (summary.correct === summary.total ? 0 : 1);

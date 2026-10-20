@@ -63,10 +63,21 @@ export function summarizeSkillMetrics(results: SkillEvalMetrics[]) {
   };
 }
 
-export function summarizeSkillAB(results: (SkillEvalMetrics & { id: string; noSkills: boolean })[]) {
+type SkillABObservation = SkillEvalMetrics & { id: string; noSkills: boolean; skills: string[] };
+
+export function skillControlContaminated(result: Pick<SkillABObservation, "noSkills" | "skills">): boolean {
+  return result.noSkills && result.skills.length > 0;
+}
+
+export function summarizeSkillAB(results: SkillABObservation[]) {
+  const variant = (items: SkillABObservation[]) => ({
+    ...summarizeSkillMetrics(items.filter((item) => !skillControlContaminated(item))),
+    runs: items.length,
+    contaminated: items.filter(skillControlContaminated).length,
+  });
   return [...new Set(results.map((result) => result.id))].map((id) => ({
     id,
-    withSkills: summarizeSkillMetrics(results.filter((result) => result.id === id && !result.noSkills)),
-    withoutSkills: summarizeSkillMetrics(results.filter((result) => result.id === id && result.noSkills)),
+    withSkills: variant(results.filter((result) => result.id === id && !result.noSkills)),
+    withoutSkills: variant(results.filter((result) => result.id === id && result.noSkills)),
   }));
 }
