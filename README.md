@@ -153,9 +153,9 @@ flowchart TB
 
 ## 🚀 快速开始
 
-目前的 **v0.1.0 Preview 仅提供源码运行方式**，尚未发布 npm 包。以下步骤以 Windows PowerShell、Node.js **24+** 为例。
+以下步骤以 Windows PowerShell、Node.js **24+** 为例。当前仓库的 `package.json` 仍为私有的 0.1.0；Beta 安装命令供发布后使用，现阶段可从源码运行。
 
-### 1. 克隆项目并构建
+### 1. 从源码运行
 
 ```powershell
 git clone https://github.com/Jmiao11/ts-coding-agent.git
@@ -167,9 +167,19 @@ pnpm build
 node dist/cli.js --help
 ```
 
-> 上面的 GitHub 地址将在仓库公开后可用。项目目前固定使用 pnpm 12.5.1；不要直接假设已发布 `npm install -g ts-coding-agent`。
+> 上面的 GitHub 地址将在仓库公开后可用。源码构建目前固定使用 pnpm 12.5.1。
 
-### 2. 配置自己的模型 API
+### 2. 从 npm 安装（Beta）
+
+Beta 发布后，在 Node.js 24 或更高版本上全局安装：
+
+```powershell
+npm i -g ts-coding-agent@beta
+```
+
+使用 `--sandbox mxc` 时另装 SDK：`npm i -g @microsoft/mxc-sdk@1.0.0`。从源码运行时，`pnpm install --frozen-lockfile` 会安装该可选依赖。
+
+### 3. 配置自己的模型 API
 
 CLI 默认读取**用户主目录**中的 `.agent-harness.env`，例如 Windows 的 `C:\Users\<用户名>\.agent-harness.env` 或 macOS/Linux 的 `~/.agent-harness.env`。
 
@@ -187,7 +197,7 @@ AGENT_THINKING=disabled
 - 也可直接设置环境变量，或使用 `--env-file <path>` 指定配置文件。
 - **不要提交密钥**。运行中的命令不等于安全沙箱；不应在不可信工作区执行 Agent。
 
-### 3. 在测试 Git 仓库启动
+### 4. 在测试 Git 仓库启动
 
 **当前版本要求工作目录位于 Git 仓库内。** 为安全起见，先创建一个单独的演示目录。在 `ts-coding-agent` 源码根目录运行：
 
@@ -243,7 +253,7 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 | `/undo` | 撤销最近一次符合条件的文件工具改动 |
 | `/exit` | 退出交互模式 |
 
-> `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。`package.json` 中的二进制名是 `ts-coding-agent`，但本版本尚未提供公开的全局安装渠道。
+> `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。Beta 发布后，全局安装的命令名为 `ts-coding-agent`。
 
 ## 交互界面
 
@@ -269,7 +279,7 @@ TUI 以 `❯` 显示你提交的任务，以 `●` 显示 Agent 的回答。工�
 
 工作区中的 Skill 放在 `.agent/skills/<name>/SKILL.md`，遵循 [Agent Skills 规范](https://agentskills.io/specification)。文件的 YAML frontmatter 必须有 `name` 和 `description`；`name` 要与所在目录名一致。格式不符合要求的 Skill 会被跳过并给出警告，不会阻止 Agent 启动。
 
-Skills 使用渐进式披露：启动时，system prompt 只列出每个 Skill 的名称、描述和路径；模型判断需要时，再调用 `read_file` 读取 `SKILL.md` 全文。没有 Skill 时，system prompt 与此前逐字节相同；`--no-skills` 可关闭目录扫描和提示词注入。本仓库附带来自 `anthropics/skills` 的 `mcp-builder` 和 `frontend-design`，其许可为 Apache-2.0，见 [第三方声明](THIRD_PARTY_NOTICES.md)。校验器遵守规范中的 description 长度上限：超过 1024 个字符的 Skill 会被跳过。
+Skills 使用渐进式披露：启动时，system prompt 只列出每个 Skill 的名称、描述和路径；模型判断需要时，再调用 `read_file` 读取 `SKILL.md` 全文。没有 Skill 时，system prompt 与此前逐字节相同；`--no-skills` 可关闭目录扫描和提示词注入。本仓库附带来自 `anthropics/skills` 的 `mcp-builder` 和 `frontend-design`，其许可为 Apache-2.0，见 [第三方声明](THIRD_PARTY_NOTICES.md)。对固定版本的 `anthropics/skills` 运行 `node scripts/check-skill-compat.mjs F:\skills-src`，**19 个里能加载 18 个**；`claude-api` 的 description 超过 1024 个字符，被跳过。加载名单、警告和来源提交见 [兼容性记录](evals/skills-compat-2026-10-20.md)。
 
 触发评测可在完成构建并配置模型 API 后运行 `node scripts/eval-skills.mjs --repeat 2`。题目在 [evals/skills.json](evals/skills.json)，包括隐式触发题和不该读取 Skill 的陷阱题；脚本从会话 JSONL 中统计工具调用与 Token 用量。修改提示词前，触发判断为 **21/24**，其中 j 题两次都未读取 `mcp-builder`，记录显示模型认为自己已经会了；按评测结果修改提示词后，独立抽查 j、g、l 为 **3/3**，每题只运行一次，样本很小。命令、逐题输出和解释见 [触发与 A/B 记录](evals/skills-k4c-run-2026-10-19.md)，较早的一轮见 [首次触发记录](evals/skills-run-2026-10-19.md)。
 
@@ -373,6 +383,8 @@ pnpm build
 ## ⚠️ 范围与已知限制
 
 - **命令隔离取决于后端**：默认的 `host` 不隔离，`codex` 和实验性的 `mxc` 各有边界，详见 [Sandboxes](#sandboxes)；请只在可信、可恢复的测试环境中使用。
+- **MCP 配置只在启动时读取**：修改用户级 `mcp.json` 或项目级 `.mcp.json` 后，要重启 Agent 才会生效。
+- **MCP 传输与认证有限**：当前只支持本机 stdio server，不支持远程 Streamable HTTP 和 OAuth。
 - **当前必须是 Git 仓库**：非 Git 目录会被拒绝；无需额外配置路径，默认使用当前目录，也可传 `--workspace`。
 - **`/undo` 不是 Git 级回滚**：只跟踪 `write_file` / `edit_file`，不能保证撤销 `run_command` 的文件副作用，也不会重写暂存区或提交历史。
 - **会话记录包含上下文**：JSONL 可能保留模型读取过的代码及工具输出，不应把本地会话文件当作可以直接公开的日志。
