@@ -38,8 +38,8 @@ describe("coding system prompt", () => {
 
     expect(prompt).toContain("- repo-overview: 快速了解一个仓库 (.agent/skills/repo-overview/SKILL.md)");
     expect(prompt).toContain("- run-tests: 怎样运行和定位失败的测试 (.agent/skills/run-tests/SKILL.md)");
-    expect(prompt).toContain("read that file with read_file before you start");
-
+    expect(prompt).toContain("read that file with read_file first and follow it, even when you think you already know the answer");
+    expect(prompt).toContain("such as a general question about a topic");
     // skill 里的相对路径相对于 skill 自己的目录，而 read_file 相对于工作区
     expect(prompt).toContain("relative to that skill's directory");
 
