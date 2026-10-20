@@ -78,6 +78,11 @@ import {
   createLoggerExtension,
 } from "./logging/logger-extension.js";
 
+import { createMcpApprovalExtension } from "./mcp/mcp-approval.js";
+import { connectMcpServer, type McpConnection } from "./mcp/mcp-client.js";
+import { loadMcpConfig, loadMcpTrust, mcpTrustKey, saveMcpTrust } from "./mcp/mcp-config.js";
+import { createMcpTools } from "./mcp/mcp-tools.js";
+
 import {
   createCodingSystemPrompt,
   createSubagentSystemPrompt,
@@ -167,6 +172,7 @@ import { formatTokenCount } from "./ui/status-text.js";
 
 import type {
   AgentMessage,
+  AgentTool,
 } from "./agent/types.js";
 
 
@@ -192,6 +198,7 @@ const HELP = `用法：
                           mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
       --tui               全屏交互界面（实验性；默认是普通的逐行输出）
       --no-skills         不扫描或注入工作区 skills
+      --no-mcp            不加载 MCP 配置或工具
   -h, --help              显示帮助
 
 需要的配置（环境变量，或写在 env 文件里）：
@@ -230,6 +237,7 @@ function parseCliArgs() {
       sandbox: { type: "string" },
       tui: { type: "boolean" },
       "no-skills": { type: "boolean" },
+      "no-mcp": { type: "boolean" },
     },
   });
 }
@@ -485,6 +493,80 @@ if (values.tui && !(process.stdin.isTTY && process.stdout.isTTY)) {
 
 const view = values.tui ? createTuiView() : createPlainView();
 
+// ---------- MCP：项目配置先确认，连接失败只少一些工具，不会降低安全性 ----------
+const mcpConnections: McpConnection[] = [];
+const mcpTools: AgentTool[] = [];
+const mcpApprovals: { name: string; label: string; autoApprove: boolean }[] = [];
+const mcpStatuses: { name: string; status: string; tools: string[] }[] = [];
+const mcpStartup: string[] = [];
+
+async function closeMcpConnections(): Promise<void> {
+  await Promise.allSettled(mcpConnections.map((connection) => connection.close()));
+}
+
+if (!values["no-mcp"]) {
+  const configured = await loadMcpConfig(workspaceRoot);
+  for (const warning of configured.warnings) view.warn(`⚠ ${warning}`);
+  const projectServers = configured.servers.filter((server) => server.source === "project");
+  const trust = projectServers.length ? await loadMcpTrust() : { trusted: new Set<string>(), warnings: [] as string[] };
+  for (const warning of trust.warnings) view.warn(`⚠ ${warning}`);
+
+  const permitted = [];
+  for (const server of configured.servers) {
+    if (server.source === "project") {
+      const key = mcpTrustKey(workspaceRoot, server);
+      if (!trust.trusted.has(key)) {
+        if (!interactive || !process.stdin.isTTY || !process.stdout.isTTY) {
+          mcpStatuses.push({ name: server.name, status: "被跳过：非交互模式未确认信任", tools: [] });
+          view.warn(`⚠ MCP server ${server.name}: 非交互模式未确认项目配置，已跳过`);
+          continue;
+        }
+        const command = [server.command, ...(server.args ?? [])].join(" ");
+        if (!(await view.confirm(`项目 .mcp.json 想启动 MCP server "${server.name}"：${command}\n（cwd: ${server.cwd}）`))) {
+          mcpStatuses.push({ name: server.name, status: "被跳过：用户拒绝信任", tools: [] });
+          continue;
+        }
+        trust.trusted.add(key);
+        try {
+          await saveMcpTrust(trust.trusted);
+        } catch (error) {
+          view.warn(`⚠ MCP 信任记录保存失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+    permitted.push(server);
+  }
+
+  await Promise.all(permitted.map(async (server) => {
+    try {
+      const connection = await connectMcpServer(server, { timeoutMs: 30_000 });
+      mcpConnections.push(connection);
+      const adapted = createMcpTools(connection);
+      for (const warning of adapted.warnings) view.warn(`⚠ ${warning}`);
+      const tools = adapted.tools.filter((tool) => server.tools === undefined
+        || server.tools.includes(tool.label.slice(server.name.length + 1)));
+      mcpTools.push(...tools);
+      for (const tool of tools) {
+        mcpApprovals.push({
+          name: tool.name,
+          label: tool.label,
+          autoApprove: server.autoApprove?.includes(tool.label.slice(server.name.length + 1)) ?? false,
+        });
+      }
+      const chars = tools.reduce((sum, tool) => sum + tool.name.length + tool.description.length + JSON.stringify(tool.parameters).length, 0);
+      mcpStartup.push(`mcp: ${server.name} · ${tools.length} 个工具 · 约 ${Math.ceil(chars / 4)} tokens`);
+      mcpStatuses.push({ name: server.name, status: "已连接", tools: tools.map((tool) => tool.name) });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      mcpStatuses.push({ name: server.name, status: `失败：${reason}`, tools: [] });
+      view.warn(`⚠ MCP server ${server.name}: ${reason}`);
+    }
+  }));
+  if (mcpConnections.length > 0) {
+    process.once("exit", () => { for (const connection of mcpConnections) void connection.close(); });
+  }
+}
+
 
 // ---------- Session：每条完整消息追加一行 JSONL ----------
 // 放在主目录而不是 workspace：不污染仓库，transcript 里有读过的文件内容
@@ -621,6 +703,7 @@ async function chooseSessionPath(): Promise<string | undefined> {
 
     if (!picked) {
       view.info("已取消。");
+      await closeMcpConnections();
       process.exit(0);
     }
 
@@ -674,7 +757,12 @@ let commandAbort: AbortController | undefined;
 
 function handleInterrupt(): void {
   if (interrupted) {
-    process.exit(130);
+    if (mcpConnections.length > 0) {
+      void closeMcpConnections().finally(() => process.exit(130));
+    } else {
+      process.exit(130);
+    }
+    return;
   }
 
   interrupted = true;
@@ -999,7 +1087,7 @@ const agent = new Agent({
     messages: restored?.messages ?? [],
 
     systemPrompt:
-      createCodingSystemPrompt(workspaceRoot, { sandbox, skills: skillCatalog.skills }),
+      createCodingSystemPrompt(workspaceRoot, { sandbox, skills: skillCatalog.skills, mcpTools: mcpTools.length > 0 }),
 
     tools: [
       createListDirectoryTool(workspaceRoot),
@@ -1009,6 +1097,7 @@ const agent = new Agent({
       createEditFileTool(workspaceRoot, { track: trackWrite }),
       createRunCommandTool(workspaceRoot, { executor: commandExecutor }),
       taskTool,
+      ...mcpTools,
     ],
   },
 
@@ -1024,6 +1113,7 @@ const agent = new Agent({
         approve: (command) =>
           view.confirm(`\n⚠ Agent 想执行：${command}\n允许吗？`, command),
       }),
+      ...(mcpTools.length > 0 ? [createMcpApprovalExtension(view, mcpApprovals)] : []),
       createLoggerExtension((line) => view.log(line)),
     ],
   },
@@ -1246,6 +1336,18 @@ const replCommands: ReplCommand[] = [
     description: "显示这份命令列表",
     run() {
       printReplHelp();
+      return "continue";
+    },
+  },
+  {
+    names: ["/mcp"],
+    description: "显示 MCP server 状态和工具",
+    run() {
+      if (mcpStatuses.length === 0) view.info("没有配置 MCP server。");
+      for (const server of mcpStatuses) {
+        view.info(`mcp: ${server.name} · ${server.status}`);
+        for (const tool of server.tools) view.info(`  ${tool}`);
+      }
       return "continue";
     },
   },
@@ -1611,6 +1713,11 @@ if (skillCatalog.skills.length > 0) {
   view.info(`skills: ${skillCatalog.skills.map((skill) => skill.name).join(", ")}`);
 }
 
+for (const line of mcpStartup) view.info(line);
+if (sandbox !== "host" && mcpConnections.length > 0) {
+  view.warn("MCP server 在本机运行，不受 --sandbox 隔离");
+}
+
 view.log(format(
   "session:",
   restored
@@ -1643,4 +1750,5 @@ view.info(
 );
 
 // TUI 要把终端恢复原样（普通终端什么都不做）
+await closeMcpConnections();
 view.close();
