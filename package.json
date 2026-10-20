@@ -1,10 +1,9 @@
 {
   "name": "ts-coding-agent",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "description": "A lightweight TypeScript coding agent runtime with tool calling, context compaction, persistent sessions, and file undo.",
   "author": "Jmiao11",
   "license": "MIT",
-  "private": true,
   "keywords": [
     "coding-agent",
     "agent-runtime",
@@ -18,11 +17,23 @@
   "bin": {
     "ts-coding-agent": "dist/cli.js"
   },
+
+  "files": [
+    "dist",
+    "!dist/examples",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "CHANGELOG.md"
+  ],
+
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepack": "pnpm clean && pnpm build"
   },
   "devEngines": {
     "packageManager": {

@@ -137,7 +137,7 @@ export async function setupMxcSandbox(
   } catch (error) {
     throw new Error(
       `无法加载 ${MXC_SDK_MODULE}：${error instanceof Error ? error.message : String(error)}\n`
-      + "它是可选依赖，请在项目目录运行 pnpm install。",
+      + "从源码运行：在项目目录执行 pnpm install；全局安装后仍缺少 SDK（可选依赖安装失败）时，执行 npm i -g @microsoft/mxc-sdk@1.0.0（需要 Windows、Node 24+）。",
     );
   }
 
