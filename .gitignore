@@ -12,3 +12,4 @@ HANDOFF_*.md
 .vscode/
 .vs/
 evals/results/
+*.tgz
