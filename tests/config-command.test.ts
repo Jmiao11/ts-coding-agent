@@ -6,6 +6,7 @@ import {
 
 import {
   parseConfigCommand,
+  parseReplConfigCommand,
 } from "../src/config/config-command.js";
 
 
@@ -62,6 +63,44 @@ describe("parseConfigCommand", () => {
     expect(errorOf(["rm"])).toContain("未知的 config 子命令：rm");
     expect(errorOf(["list", "extra"])).toContain("config list 不接受参数");
     expect(errorOf(["set", "ui", "plain", "extra"]))
+      .toContain("config set 只接受设置项和一个值");
+  });
+});
+
+
+function replErrorOf(
+  args: string[],
+): string {
+  const result = parseReplConfigCommand(args);
+
+  if (!("error" in result)) {
+    throw new Error(`expected an error, got ${JSON.stringify(result)}`);
+  }
+
+  return result.error;
+}
+
+
+describe("parseReplConfigCommand", () => {
+  it("lists settings with no arguments, and parses set", () => {
+    expect(parseReplConfigCommand([]))
+      .toEqual({ command: { action: "list" } });
+    expect(parseReplConfigCommand(["set", "ui", "plain"]))
+      .toEqual({ command: { action: "set", key: "ui", value: "plain" } });
+  });
+
+  it("rejects unknown keys, values and arguments", () => {
+    expect(replErrorOf(["get", "ui"]))
+      .toContain("未知的 /config 命令：get");
+    expect(replErrorOf(["set", "colour", "plain"]))
+      .toContain("不认识的设置项 colour");
+    expect(replErrorOf(["set", "sandbox", "docker"]))
+      .toContain("sandbox 只能是 host / codex / mxc");
+    expect(replErrorOf(["set"]))
+      .toContain("config set 需要设置项和值");
+    expect(replErrorOf(["set", "ui"]))
+      .toContain("config set 需要设置项和值");
+    expect(replErrorOf(["set", "ui", "plain", "extra"]))
       .toContain("config set 只接受设置项和一个值");
   });
 });

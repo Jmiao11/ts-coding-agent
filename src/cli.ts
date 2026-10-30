@@ -63,6 +63,7 @@ import {
 import {
   CONFIG_USAGE,
   parseConfigCommand,
+  parseReplConfigCommand,
   type ConfigCommand,
 } from "./config/config-command.js";
 
@@ -386,18 +387,19 @@ function settingSource(
 function printSettingsList(
   settings: Settings,
   fileSettings: Partial<Settings>,
+  write: (line: string) => void = (line) => console.log(line),
 ): void {
   const keys = Object.keys(SETTING_CHOICES) as SettingKey[];
   const width = Math.max(...keys.map((key) => key.length));
 
-  console.log(
+  write(
     `设置文件：${SETTINGS_PATH}${existsSync(SETTINGS_PATH) ? "" : "（不存在，全部使用默认值）"}`,
   );
 
   for (const key of keys) {
     const source = settingSource(fileSettings, key);
 
-    console.log(
+    write(
       `${key.padEnd(width)}  ${settings[key].padEnd(8)}  （来源：${source}；可选：${SETTING_CHOICES[key].join(" / ")}）`,
     );
   }
@@ -1953,6 +1955,67 @@ const replCommands: ReplCommand[] = [
     description: "显示这份命令列表",
     run() {
       printReplHelp();
+      return "continue";
+    },
+  },
+  {
+    names: ["/config"],
+    usage: "[set <key> <value>]",
+    description: "查看或修改设置（保存后下次生效）",
+    run(args) {
+      const parsed = parseReplConfigCommand(
+        args.split(/\s+/).filter((part) => part.length > 0),
+      );
+
+      if ("error" in parsed) {
+        view.info(parsed.error);
+        return "continue";
+      }
+
+      if (parsed.command.action === "list") {
+        try {
+          const loaded = loadSettings(SETTINGS_PATH);
+
+          for (const warning of loaded.warnings) {
+            view.warn(`⚠ ${warning}`);
+          }
+
+          printSettingsList(
+            resolveSettings(loaded.settings),
+            loaded.settings,
+            (line) => view.info(line),
+          );
+        } catch (error) {
+          view.warn(
+            `无法读取设置文件 ${SETTINGS_PATH}：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        return "continue";
+      }
+
+      try {
+        saveSetting(
+          SETTINGS_PATH,
+          parsed.command.key,
+          parsed.command.value as Settings[SettingKey],
+        );
+      } catch (error) {
+        view.warn(
+          `保存设置失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+        return "continue";
+      }
+
+      view.info(
+        `已保存 ${parsed.command.key} = ${parsed.command.value}。`,
+      );
+      view.info(
+        parsed.command.key === "nonGitDirectory"
+          ? "下次进入非 Git 目录时生效。"
+          : "下次启动时生效。",
+      );
+
       return "continue";
     },
   },

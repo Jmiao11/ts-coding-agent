@@ -33,6 +33,20 @@ export type ConfigCommandResult =
   | { error: string };
 
 
+export const REPL_CONFIG_USAGE =
+  "用法：/config 列出设置；/config set <key> <value> 修改设置。";
+
+
+export type ReplConfigCommand =
+  | { action: "list" }
+  | { action: "set"; key: SettingKey; value: string };
+
+
+export type ReplConfigCommandResult =
+  | { command: ReplConfigCommand }
+  | { error: string };
+
+
 /**
  * 解析 "config" 后面的参数。纯函数：不读写文件，方便测试。
  * key 和 value 的校验也放在这里，命令行和测试看到同一套错误。
@@ -115,4 +129,37 @@ export function parseConfigCommand(
         error: `未知的 config 子命令：${name}。\n\n${CONFIG_USAGE}`,
       };
   }
+}
+
+
+/**
+ * 解析 REPL 里的 /config。只支持列出设置和 set：
+ * 当前会话不切换界面或沙箱，所以没有 get / path。
+ */
+export function parseReplConfigCommand(
+  args: readonly string[],
+): ReplConfigCommandResult {
+  const [name] = args;
+
+  if (name === undefined) {
+    return { command: { action: "list" } };
+  }
+
+  if (name !== "set") {
+    return {
+      error: `未知的 /config 命令：${name}。\n${REPL_CONFIG_USAGE}`,
+    };
+  }
+
+  const parsed = parseConfigCommand(args);
+
+  if ("error" in parsed) {
+    return parsed;
+  }
+
+  if (parsed.command.action !== "set") {
+    return { error: REPL_CONFIG_USAGE };
+  }
+
+  return { command: parsed.command };
 }

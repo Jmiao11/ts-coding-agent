@@ -246,11 +246,13 @@ Linux/macOS 同理：在目标项目目录里执行 `node /absolute/path/to/ts-c
 | `node dist/cli.js --no-skills` | 不扫描或注入工作区 Skills |
 | `node dist/cli.js --no-mcp` | 不加载 MCP 配置或工具 |
 | `node dist/cli.js --plain` | 强制普通逐行输出（交互终端里默认是 TUI） |
+| `node dist/cli.js setup [--env-file <path>]` | 首次运行引导：模型配置、连通测试和默认设置 |
 | `node dist/cli.js config list` | 显示每项设置、来源和可选值 |
 | `node dist/cli.js config get <key>` | 显示一项设置 |
 | `node dist/cli.js config set <key> <value>` | 校验并保存一项设置 |
 | `node dist/cli.js config path` | 显示设置文件路径 |
 | `/help` | 查看 REPL 内命令 |
+| `/config` | 查看设置；`/config set <key> <value>` 修改设置 |
 | `/new` | 新建会话 |
 | `/resume` | 选择和恢复会话 |
 | `/compact [要求]` | 手动压缩上下文；保留最近消息 |
@@ -262,6 +264,18 @@ Linux/macOS 同理：在目标项目目录里执行 `node /absolute/path/to/ts-c
 > `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。Beta 发布后，全局安装的命令名为 `ts-coding-agent`。
 
 设置文件是 `~/.agent-harness/config.json`（与 `mcp.json` 在同一目录），保存 `ui`、`sandbox`、`nonGitDirectory` 的默认值；命令行参数优先。`config set` 会先校验取值再保存。`nonGitDirectory` 决定工作区不是 Git 仓库时怎么处理，见[不在 Git 仓库里运行](#不在-git-仓库里运行)。任务本身名叫 `config` 时，用 `--` 隔开：`node dist/cli.js -- config`。
+
+## 首次使用
+
+第一次使用可以运行首次运行引导：
+
+```powershell
+ts-coding-agent setup
+```
+
+引导依次询问 Base URL、API Key、模型 ID，并用 `GET {baseUrl}/models`（404 时改用最小的 chat completion）做一次 15 秒超时的连通测试；失败时可以选择仍然保存。随后询问 `ui`、`sandbox`、`nonGitDirectory`，选过不同值才写入 `~/.agent-harness/config.json`。API Key 输入时不回显，只显示字符数；它只写入 env 文件（默认 `~/.agent-harness.env`，可用 `--env-file` 指定），不会出现在屏幕输出、日志、会话文件或 system prompt 里。env 文件里的其他变量、注释和换行符会原样保留。
+
+交互模式（没有任务描述）、stdin 和 stdout 都是 TTY 时，如果读完 env 文件后仍缺少 `AGENT_API_KEY`、`AGENT_BASE_URL` 或 `AGENT_MODEL`，启动前会问一次「还没有配置模型，现在设置吗？[Y/n]」，答是就进入同一个引导。一次性任务或非 TTY 环境不会自动触发，仍按原来的缺少配置报错，并提示运行 `ts-coding-agent setup`。
 
 ## 不在 Git 仓库里运行
 
@@ -297,6 +311,7 @@ TUI 以 `❯` 显示你提交的任务，以 `●` 显示 Agent 的回答。工�
 | Ctrl+O | 展开或收起最近一组工具调用；输入框有文字或正在等待审批时也可使用，不会改变输入或回答审批 |
 | y | 审批时允许命令；其他按键视为拒绝（Ctrl+O 只切换详情） |
 | `/debug` | TUI 中切换诊断日志，新日志以暗色显示；普通终端始终显示诊断日志，开关无效 |
+| `/config` | 查看设置；`/config set <key> <value>` 校验后保存。ui / sandbox 下次启动生效，nonGitDirectory 下次进入非 Git 目录时生效 |
 | `/help` | 查看交互命令及界面快捷键 |
 
 ## Skills
@@ -400,7 +415,7 @@ pnpm typecheck
 pnpm build
 ```
 
-**当前本地回归结果（Windows）**：`pnpm test` 的 **44 个测试文件通过，268 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **46 个测试文件通过，282 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
 测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、Skills、MCP、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
