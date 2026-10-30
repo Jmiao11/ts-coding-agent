@@ -136,7 +136,7 @@ flowchart TB
 | CLI | `src/cli.ts` | 参数、交互命令、会话选择、日志与中止处理 |
 | UI | `src/ui/` | 普通终端与 TUI 的共同界面、工具活动展示 |
 | UI 接口 | `src/ui/agent-view.ts` | `AgentView`：输出、输入、审批、中止与界面生命周期 |
-| UI 实现 | `src/ui/plain-view.ts`、`src/ui/tui-view.ts` | 普通终端与基于 pi-tui 1.3.0 的实验性全屏界面 |
+| UI 实现 | `src/ui/plain-view.ts`、`src/ui/tui-view.ts` | 普通终端与基于 pi-tui 1.3.0 的全屏界面 |
 | UI 事件适配 | `src/ui/answer-stream.ts`、`src/ui/tool-activity.ts` | 流式回答、结构化工具事件转为 view 调用 |
 | UI 展示组件 | `src/ui/tool-group.ts`、`src/ui/status-text.ts` | 工具活动分组、审批记录、详情折叠与 Token 数格式化 |
 
@@ -245,6 +245,11 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 | `node dist/cli.js --session <id>` | 通过会话 ID 前缀恢复 |
 | `node dist/cli.js --no-skills` | 不扫描或注入工作区 Skills |
 | `node dist/cli.js --no-mcp` | 不加载 MCP 配置或工具 |
+| `node dist/cli.js --plain` | 强制普通逐行输出（交互终端里默认是 TUI） |
+| `node dist/cli.js config list` | 显示每项设置、来源和可选值 |
+| `node dist/cli.js config get <key>` | 显示一项设置 |
+| `node dist/cli.js config set <key> <value>` | 校验并保存一项设置 |
+| `node dist/cli.js config path` | 显示设置文件路径 |
 | `/help` | 查看 REPL 内命令 |
 | `/new` | 新建会话 |
 | `/resume` | 选择和恢复会话 |
@@ -256,12 +261,16 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 
 > `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。Beta 发布后，全局安装的命令名为 `ts-coding-agent`。
 
+设置文件是 `~/.agent-harness/config.json`（与 `mcp.json` 在同一目录），保存 `ui`、`sandbox`、`nonGitDirectory` 的默认值；命令行参数优先。`config set` 会先校验取值再保存。`nonGitDirectory` 目前只保存和显示，暂不影响运行。任务本身名叫 `config` 时，用 `--` 隔开：`node dist/cli.js -- config`。
+
 ## 交互界面
 
-默认使用普通终端，逐行输出全部诊断日志。加 `--tui` 可启用实验性的全屏界面；它要求标准输入和标准输出都是 TTY，不能通过管道或重定向运行。
+**TUI 现在是默认界面，但只在交互式终端里生效**：没有任务描述、且标准输入和标准输出都是 TTY 时自动启用。一次性任务、管道或重定向会自动使用普通终端，逐行输出全部诊断日志；`--plain` 可以显式关闭 TUI。
+
+`--tui` 仍然保留，用来明确要求全屏界面；它要求标准输入和标准输出都是 TTY，否则报错。`--tui` 和 `--plain` 不能同时使用。
 
 ```powershell
-node dist/cli.js --tui --workspace <Git工作区>
+node dist/cli.js --plain --workspace <Git工作区>
 ```
 
 TUI 以 `❯` 显示你提交的任务，以 `●` 显示 Agent 的回答。工具调用按任务分组，成功的工具输出默认收起；失败的工具和你审批过的命令始终显示。等待审批时，问题显示在工具组内；回答后保留“你允许了 / 你拒绝了”的记录。底栏显示工作区、模型、沙箱与累计 Token 用量。
@@ -377,7 +386,7 @@ pnpm typecheck
 pnpm build
 ```
 
-**当前本地回归结果（Windows）**：`pnpm test` 的 **40 个测试文件通过，238 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **43 个测试文件通过，259 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
 测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、Skills、MCP、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
@@ -390,7 +399,7 @@ pnpm build
 - **`/undo` 不是 Git 级回滚**：只跟踪 `write_file` / `edit_file`，不能保证撤销 `run_command` 的文件副作用，也不会重写暂存区或提交历史。
 - **会话记录包含上下文**：JSONL 可能保留模型读取过的代码及工具输出，不应把本地会话文件当作可以直接公开的日志。
 - **模型适配范围有限**：当前主要验证 OpenAI-compatible Chat Completions 与 DeepSeek thinking disabled；未实现所有 Provider 的专有协议与 reasoning 透传。
-- **交互功能范围有限**：已提供普通终端与实验性的 `--tui`；尚未实现对话树 `/tree`、通用权限模式或多 Agent 编排。
+- **交互功能范围有限**：已提供普通终端与 TUI（交互式终端里默认启用，`--plain` 可关闭）；尚未实现对话树 `/tree`、通用权限模式或多 Agent 编排。
 - **TUI 仅在 Windows PowerShell 7 上实测过**：其他终端及平台的显示、输入与退出清理仍待验证。
 - **Ctrl+O 只能切换最近一组工具调用**：修改已经滚进回滚区的内容会导致 pi-tui 清屏重画，因此不支持展开更早的组。
 - **`/debug` 不会删除历史日志**：关闭之后，已经显示的诊断日志不会消失，只隐藏后续新日志。

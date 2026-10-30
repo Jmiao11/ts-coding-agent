@@ -56,6 +56,26 @@ import {
 } from "./ai/providers/openai-compatible.js";
 
 import {
+  chooseUi,
+} from "./config/choose-ui.js";
+
+import {
+  CONFIG_USAGE,
+  parseConfigCommand,
+  type ConfigCommand,
+} from "./config/config-command.js";
+
+import {
+  SETTING_CHOICES,
+  isSettingValue,
+  loadSettings,
+  resolveSettings,
+  saveSetting,
+  type SettingKey,
+  type Settings,
+} from "./config/settings.js";
+
+import {
   createCompactor,
   type CompactionCheckpoint,
   type Compactor,
@@ -179,9 +199,17 @@ import type {
 const DEFAULT_ENV_FILE =
   join(homedir(), ".agent-harness.env");
 
+const SETTINGS_PATH =
+  join(homedir(), ".agent-harness", "config.json");
+
+/** 报错信息里用的简短写法，不依赖当前平台的主目录路径 */
+const SETTINGS_DISPLAY_PATH =
+  "~/.agent-harness/config.json";
+
 const HELP = `用法：
   ts-coding-agent [选项] "任务描述"   运行一个任务后退出
   ts-coding-agent [选项]              交互模式：连续输入多个任务（需要交互式终端）
+  ts-coding-agent config <子命令>     查看或修改默认设置
 
 在 Git 仓库里运行 coding agent。改动不会自动提交，请用 git diff 审查。
 
@@ -193,13 +221,19 @@ const HELP = `用法：
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
-      --sandbox <host|codex|mxc>  run_command 在哪里执行（默认 host：本机，没有隔离）
+      --sandbox <host|codex|mxc>  run_command 在哪里执行（默认：设置文件里的值，否则 host）
+                          host：本机，没有隔离
                           codex：通过 codex sandbox 执行（只支持 Windows，需要 AGENT_CODEX_EXE）
                           mxc：通过 Microsoft MXC 执行（实验性，只支持 Windows，需要 Node 24）
-      --tui               全屏交互界面（实验性；默认是普通的逐行输出）
+      --plain             普通逐行输出（交互式终端里默认是 TUI，用这个关掉）
+      --tui               全屏交互界面（只在交互式终端里生效；和 --plain 不能同时使用）
       --no-skills         不扫描或注入工作区 skills
       --no-mcp            不加载 MCP 配置或工具
   -h, --help              显示帮助
+
+设置文件：
+  默认值来自 ${SETTINGS_DISPLAY_PATH}；命令行参数优先。
+  ${CONFIG_USAGE}
 
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
@@ -220,11 +254,129 @@ function fail(
 }
 
 
+// ---------- config 子命令 ----------
+
+/** 第一个位置参数是 config，且它前面没有 "--" */
+function isConfigSubcommand(): boolean {
+  const first = args.tokens.find(
+    (token) => token.kind === "positional",
+  );
+
+  if (first?.kind !== "positional" || first.value !== "config") {
+    return false;
+  }
+
+  const index = args.tokens.indexOf(first);
+
+  return !args.tokens
+    .slice(0, index)
+    .some((token) => token.kind === "option-terminator");
+}
+
+
+/** 当前值来自哪里：设置文件里写了这一项，还是用默认值 */
+function settingSource(
+  fileSettings: Partial<Settings>,
+  key: SettingKey,
+): string {
+  return fileSettings[key] === undefined ? "默认" : "配置文件";
+}
+
+
+function printSettingsList(
+  settings: Settings,
+  fileSettings: Partial<Settings>,
+): void {
+  const keys = Object.keys(SETTING_CHOICES) as SettingKey[];
+  const width = Math.max(...keys.map((key) => key.length));
+
+  console.log(
+    `设置文件：${SETTINGS_PATH}${existsSync(SETTINGS_PATH) ? "" : "（不存在，全部使用默认值）"}`,
+  );
+
+  for (const key of keys) {
+    const source = settingSource(fileSettings, key);
+
+    console.log(
+      `${key.padEnd(width)}  ${settings[key].padEnd(8)}  （来源：${source}；可选：${SETTING_CHOICES[key].join(" / ")}）`,
+    );
+  }
+
+  console.log("\nnonGitDirectory 目前只保存和显示，暂不影响运行。");
+}
+
+
+/** 执行 config 子命令并退出：不读 env 文件，也不检查 Git 仓库 */
+function runConfigSubcommand(
+  argv: readonly string[],
+): never {
+  const parsed = parseConfigCommand(argv);
+
+  if ("error" in parsed) {
+    console.error(parsed.error);
+    process.exit(1);
+  }
+
+  const command: ConfigCommand = parsed.command;
+
+  if (command.action === "set") {
+    try {
+      saveSetting(
+        SETTINGS_PATH,
+        command.key,
+        command.value as Settings[SettingKey],
+      );
+    } catch (error) {
+      console.error(
+        error instanceof Error ? error.message : String(error),
+      );
+      process.exit(1);
+    }
+
+    console.log(
+      `已保存 ${command.key} = ${command.value}（${SETTINGS_PATH}）`,
+    );
+    process.exit(0);
+  }
+
+  let fileSettings: Partial<Settings> = {};
+
+  try {
+    const loaded = loadSettings(SETTINGS_PATH);
+
+    fileSettings = loaded.settings;
+
+    for (const warning of loaded.warnings) {
+      console.warn(`⚠ ${warning}`);
+    }
+  } catch (error) {
+    // 读不了文件也不能让 config path / list / get 崩溃：按全部默认值显示
+    console.warn(
+      `⚠ 无法读取设置文件 ${SETTINGS_PATH}：${error instanceof Error ? error.message : String(error)}，使用默认值`,
+    );
+  }
+
+  const settings = resolveSettings(fileSettings);
+
+  if (command.action === "path") {
+    console.log(SETTINGS_PATH);
+  } else if (command.action === "get") {
+    console.log(settings[command.key]);
+  } else {
+    printSettingsList(settings, fileSettings);
+  }
+
+  process.exit(0);
+}
+
+
 // ---------- 参数 ----------
 
 function parseCliArgs() {
   return parseArgs({
     allowPositionals: true,
+    // tokens 保留 "--" 的位置：用来区分 config 子命令和名字就叫 config 的任务
+    tokens: true,
     options: {
       help: { type: "boolean", short: "h" },
       continue: { type: "boolean", short: "c" },
@@ -235,6 +387,7 @@ function parseCliArgs() {
       "env-file": { type: "string" },
       "context-window": { type: "string" },
       sandbox: { type: "string" },
+      plain: { type: "boolean" },
       tui: { type: "boolean" },
       "no-skills": { type: "boolean" },
       "no-mcp": { type: "boolean" },
@@ -257,6 +410,18 @@ const { values, positionals } = args;
 if (values.help) {
   console.log(HELP);
   process.exit(0);
+}
+
+// config 子命令不加载模型配置，也不要求当前目录是 Git 仓库。
+// 第一个位置参数是 config、且没有被 "--" 隔开时才进入；
+// `ts-coding-agent -- config` 仍然是把 "config" 当作任务描述。
+if (isConfigSubcommand()) {
+  runConfigSubcommand(positionals.slice(1));
+}
+
+// 先报冲突，免得在非交互环境里被下面的「缺少任务描述」掩盖
+if (values.tui && values.plain) {
+  fail("--tui 和 --plain 只能选一个。");
 }
 
 const sessionModes = [
@@ -282,6 +447,68 @@ if (interactive && !process.stdin.isTTY) {
 }
 
 
+// ---------- 设置文件 ----------
+// 默认值来自 ~/.agent-harness/config.json（和 mcp.json 同一个目录）。
+// 设置文件有问题只警告，不拒绝启动；warnings 等 view 建好后用 view.warn 打印。
+
+let fileSettings: Partial<Settings> = {};
+const settingsWarnings: string[] = [];
+
+try {
+  const loaded = loadSettings(SETTINGS_PATH);
+
+  fileSettings = loaded.settings;
+  settingsWarnings.push(...loaded.warnings);
+} catch (error) {
+  settingsWarnings.push(
+    `无法读取设置文件 ${SETTINGS_PATH}：${error instanceof Error ? error.message : String(error)}，全部使用默认值`,
+  );
+}
+
+// 命令行参数只覆盖它真正给了值的项
+const cliSettings: Partial<Settings> = {};
+
+if (values.sandbox !== undefined) {
+  if (!isSettingValue("sandbox", values.sandbox)) {
+    fail(`--sandbox 只能是 host、codex 或 mxc（收到：${values.sandbox}）。`);
+  }
+
+  cliSettings.sandbox = values.sandbox;
+}
+
+if (values.tui) {
+  cliSettings.ui = "tui";
+} else if (values.plain) {
+  cliSettings.ui = "plain";
+}
+
+// 命令行 > 设置文件 > 默认值
+const settings = resolveSettings(fileSettings, cliSettings);
+
+/** 当前沙箱值是不是从设置文件来的（没有在命令行里写 --sandbox） */
+const sandboxFromConfig =
+  values.sandbox === undefined
+  && fileSettings.sandbox !== undefined;
+
+const configSandboxHint = sandboxFromConfig
+  ? `\n这个沙箱来自 ${SETTINGS_DISPLAY_PATH}；临时改用本机执行：--sandbox host。`
+  : "";
+
+// 界面选择只依赖设置、参数和 TTY，提前在这里校验 --plain / --tui 的冲突
+const uiChoice = chooseUi({
+  settings,
+  tui: values.tui === true,
+  plain: values.plain === true,
+  interactive,
+  stdinIsTTY: Boolean(process.stdin.isTTY),
+  stdoutIsTTY: Boolean(process.stdout.isTTY),
+});
+
+if ("error" in uiChoice) {
+  fail(uiChoice.error);
+}
+
+
 // ---------- 配置 ----------
 // Key 默认放在主目录，而不是被修改的项目里
 
@@ -296,12 +523,13 @@ if (existsSync(envFile)) {
 
 function requiredEnv(
   name: string,
+  after = "",
 ): string {
   const value = process.env[name];
 
   if (!value) {
     fail(
-      `缺少配置 ${name}。请设置环境变量，或写进 ${envFile}。`,
+      `缺少配置 ${name}。请设置环境变量，或写进 ${envFile}。${after}`,
     );
   }
 
@@ -384,11 +612,7 @@ if (gitStatus.stdout.trim().length > 0) {
 // ---------- 命令在哪里执行：本机或 Codex 沙箱 ----------
 // 沙箱起不来就拒绝启动，绝不悄悄退回本机执行
 
-const sandbox = values.sandbox ?? "host";
-
-if (sandbox !== "host" && sandbox !== "codex" && sandbox !== "mxc") {
-  fail(`--sandbox 只能是 host、codex 或 mxc（收到：${sandbox}）。`);
-}
+const sandbox = settings.sandbox;
 
 let commandExecutor: CommandExecutor;
 let sandboxLabel: string;
@@ -398,23 +622,26 @@ if (sandbox === "host") {
   sandboxLabel = "host（命令直接在本机执行，没有隔离）";
 } else if (sandbox === "codex") {
   if (process.platform !== "win32") {
-    fail("--sandbox codex 目前只支持 Windows。");
+    fail(`--sandbox codex 目前只支持 Windows。${configSandboxHint}`);
   }
 
-  const codexExe = requiredEnv("AGENT_CODEX_EXE");
+  const codexExe = requiredEnv("AGENT_CODEX_EXE", configSandboxHint);
 
   // Node 不经过 shell 无法启动 .cmd，所以必须是真正的 codex.exe
   if (!codexExe.toLowerCase().endsWith(".exe") || !existsSync(codexExe)) {
     fail(
       `AGENT_CODEX_EXE 必须是存在的 codex.exe 完整路径（收到：${codexExe}）。\n`
-      + "npm 安装的一般在 <npm 全局目录>\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+      + "npm 安装的一般在 <npm 全局目录>\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe"
+      + configSandboxHint,
     );
   }
 
   const mode = process.env.AGENT_SANDBOX_MODE || "elevated";
 
   if (mode !== "elevated" && mode !== "mxc") {
-    fail(`AGENT_SANDBOX_MODE 只能是 elevated 或 mxc（收到：${mode}）。`);
+    fail(
+      `AGENT_SANDBOX_MODE 只能是 elevated 或 mxc（收到：${mode}）。${configSandboxHint}`,
+    );
   }
 
   console.log("正在检查 Codex 沙箱…");
@@ -430,7 +657,10 @@ if (sandbox === "host") {
   } catch (error) {
     fail(
       `${error instanceof Error ? error.message : String(error)}\n\n`
-      + "不会退回本机执行。确实要在本机执行命令，请去掉 --sandbox codex。",
+      + "不会退回本机执行。"
+      + (sandboxFromConfig
+        ? configSandboxHint
+        : "确实要在本机执行命令，请去掉 --sandbox codex。"),
     );
   }
 
@@ -459,7 +689,10 @@ if (sandbox === "host") {
   } catch (error) {
     fail(
       `${error instanceof Error ? error.message : String(error)}\n\n`
-      + "不会退回本机执行。确实要在本机执行命令，请去掉 --sandbox mxc。",
+      + "不会退回本机执行。"
+      + (sandboxFromConfig
+        ? configSandboxHint
+        : "确实要在本机执行命令，请去掉 --sandbox mxc。"),
     );
   }
 }
@@ -487,11 +720,14 @@ function formatTime(
 
 
 // 所有屏幕输出和用户输入都经过 view（见 src/ui/agent-view.ts）
-if (values.tui && !(process.stdin.isTTY && process.stdout.isTTY)) {
-  fail("--tui 需要在交互式终端里运行。");
-}
+const view = uiChoice.ui === "tui"
+  ? createTuiView()
+  : createPlainView();
 
-const view = values.tui ? createTuiView() : createPlainView();
+// 设置文件的问题只警告：最坏情况是所有项都用默认值
+for (const warning of settingsWarnings) {
+  view.warn(`⚠ ${warning}`);
+}
 
 // ---------- MCP：项目配置先确认，连接失败只少一些工具，不会降低安全性 ----------
 const mcpConnections: McpConnection[] = [];
