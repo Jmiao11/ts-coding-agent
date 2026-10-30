@@ -178,6 +178,7 @@ npm i -g ts-coding-agent@beta
 ```
 
 使用 `--sandbox mxc` 时另装 SDK：`npm i -g @microsoft/mxc-sdk@1.0.0`。从源码运行时，`pnpm install --frozen-lockfile` 会安装该可选依赖。
+较新版本的 npm 默认不运行依赖的安装脚本；如果 `--sandbox mxc` 启动失败，可加上 `--allow-scripts=koffi,node-pty` 重新安装：`npm i -g ts-coding-agent@beta --allow-scripts=koffi,node-pty`。
 
 ### 3. 配置自己的模型 API
 

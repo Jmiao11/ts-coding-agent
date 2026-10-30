@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { connectMcpServer, type McpConnection } from "../src/mcp/mcp-client.js";
@@ -56,6 +59,13 @@ describe("connectMcpServer", () => {
   it("reports a missing command", async () => {
     await expect(connectMcpServer({ name: "missing-server", command: "missing-mcp-command-928573" }, { timeoutMs: 1_000 }))
       .rejects.toThrow(/missing-server.*missing-mcp-command-928573/);
+  });
+
+  it("reports a missing cwd before spawning", async () => {
+    const cwd = join(tmpdir(), `missing-mcp-cwd-${randomUUID()}`);
+    const connection = connectMcpServer({ name: "fixture", command: process.execPath, cwd });
+    await expect(connection).rejects.toThrow(cwd);
+    await expect(connection).rejects.not.toThrow(/ENOENT/);
   });
 
   it("closes the subprocess and rejects later calls", async () => {

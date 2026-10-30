@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { Client, type CallToolResult, type Tool } from "@modelcontextprotocol/client";
@@ -24,6 +25,9 @@ export async function connectMcpServer(
   config: McpServerConfig,
   options: { timeoutMs?: number } = {},
 ): Promise<McpConnection> {
+  if (config.cwd && (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory())) {
+    throw new Error(`MCP server "${config.name}" 的 cwd 不存在：${config.cwd}`);
+  }
   const { version } = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
   const client = new Client({ name: "ts-coding-agent", version });
   const transport = new StdioClientTransport({
