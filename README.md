@@ -200,7 +200,7 @@ AGENT_THINKING=disabled
 
 ### 4. 在测试 Git 仓库启动
 
-**当前版本要求工作目录位于 Git 仓库内。** 为安全起见，先创建一个单独的演示目录。在 `ts-coding-agent` 源码根目录运行：
+为安全起见，先创建一个单独的演示目录。在 `ts-coding-agent` 源码根目录运行：
 
 ```powershell
 New-Item -ItemType Directory -Force ..\ts-coding-agent-demo | Out-Null
@@ -220,18 +220,18 @@ node dist/cli.js --workspace ..\ts-coding-agent-demo
 > /exit
 ```
 
-如果你已经有自己的 Git 项目，也可以从该项目目录启动：
+如果你已经有一个项目目录，也可以从那里启动：
 
 ```powershell
 # 先在 TS Coding Agent 源码目录取得 CLI 的绝对路径
 $agentCli = (Resolve-Path .\dist\cli.js).Path
 
-# 换到自己的 Git 项目
-Set-Location 'F:\path\to\your-git-project'
+# 换到自己的项目目录
+Set-Location 'F:\path\to\your-project'
 node $agentCli
 ```
 
-Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-coding-agent/dist/cli.js`。跨平台完整验收仍在进行中。
+Linux/macOS 同理：在目标项目目录里执行 `node /absolute/path/to/ts-coding-agent/dist/cli.js`。跨平台完整验收仍在进行中。
 
 ### 常用命令
 
@@ -239,7 +239,7 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 | --- | --- |
 | `node dist/cli.js "任务"` | 单次执行任务并退出（从源码目录运行） |
 | `node dist/cli.js` | 启动 REPL（默认当前目录作为工作区） |
-| `node dist/cli.js -w <dir>` | 指定 Git 工作区 |
+| `node dist/cli.js -w <dir>` | 指定工作区 |
 | `node dist/cli.js -c` | 继续当前工作区最近一次会话 |
 | `node dist/cli.js -r` | 从当前工作区的会话列表中选择 |
 | `node dist/cli.js --session <id>` | 通过会话 ID 前缀恢复 |
@@ -261,7 +261,21 @@ Linux/macOS 同理：在目标 Git 仓库里执行 `node /absolute/path/to/ts-co
 
 > `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。Beta 发布后，全局安装的命令名为 `ts-coding-agent`。
 
-设置文件是 `~/.agent-harness/config.json`（与 `mcp.json` 在同一目录），保存 `ui`、`sandbox`、`nonGitDirectory` 的默认值；命令行参数优先。`config set` 会先校验取值再保存。`nonGitDirectory` 目前只保存和显示，暂不影响运行。任务本身名叫 `config` 时，用 `--` 隔开：`node dist/cli.js -- config`。
+设置文件是 `~/.agent-harness/config.json`（与 `mcp.json` 在同一目录），保存 `ui`、`sandbox`、`nonGitDirectory` 的默认值；命令行参数优先。`config set` 会先校验取值再保存。`nonGitDirectory` 决定工作区不是 Git 仓库时怎么处理，见[不在 Git 仓库里运行](#不在-git-仓库里运行)。任务本身名叫 `config` 时，用 `--` 隔开：`node dist/cli.js -- config`。
+
+## 不在 Git 仓库里运行
+
+工作区不是 Git 仓库时，按 `~/.agent-harness/config.json` 里的 `nonGitDirectory` 处理：
+
+| 值 | 行为 |
+| --- | --- |
+| `ask`（默认） | 交互模式下询问：1) 在这里运行 `git init`（推荐）；2) 不用 Git，直接运行；3) 退出。选 1 或 2 后，可以再回答一次是否保存为以后的默认设置 |
+| `init` | 自动在工作区执行 `git init` 后继续启动（不会自动 commit） |
+| `allow` | 不用 Git 直接启动；每次启动都警告改动无法用 `git diff` 审查 |
+
+受保护的目录（磁盘根目录、用户主目录及其上级目录、系统目录）不允许 `git init`，也不会按 `allow` 静默运行：交互模式下只提供「不用 Git，直接运行 / 退出」，非交互模式直接拒绝。判断前会用 `realpath` 展开 8.3 短路径和符号链接，避免绕过保护。
+
+不在 Git 仓库里运行时，`/undo` 仍然可以撤销 `write_file` / `edit_file` 的改动；`run_command` 产生的文件改动无法回滚。用 `ts-coding-agent config set nonGitDirectory ask|init|allow` 修改策略。
 
 ## 交互界面
 
@@ -386,7 +400,7 @@ pnpm typecheck
 pnpm build
 ```
 
-**当前本地回归结果（Windows）**：`pnpm test` 的 **43 个测试文件通过，259 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
+**当前本地回归结果（Windows）**：`pnpm test` 的 **44 个测试文件通过，268 项测试通过、1 项跳过**。这是本地验收记录，**不是 GitHub CI 的实时状态**。
 
 测试覆盖 Agent Loop、流事件、模型协议转换、上下文压缩、会话恢复、文件工具、命令执行、检查点、撤销、Skills、MCP、AgentView、TUI 工具分组与审批显示，以及部分安全边界。自动化测试不能替代真实模型、真实终端操作与跨平台验收。
 
@@ -395,7 +409,7 @@ pnpm build
 - **命令隔离取决于后端**：默认的 `host` 不隔离，`codex` 和实验性的 `mxc` 各有边界，详见 [Sandboxes](#sandboxes)；请只在可信、可恢复的测试环境中使用。
 - **MCP 配置只在启动时读取**：修改用户级 `mcp.json` 或项目级 `.mcp.json` 后，要重启 Agent 才会生效。
 - **MCP 传输与认证有限**：当前只支持本机 stdio server，不支持远程 Streamable HTTP 和 OAuth。
-- **当前必须是 Git 仓库**：非 Git 目录会被拒绝；无需额外配置路径，默认使用当前目录，也可传 `--workspace`。
+- **工作区可以是普通目录，但有保护**：默认 `nonGitDirectory=ask`，交互模式询问，非交互模式拒绝；`init` 自动初始化，`allow` 每次警告。磁盘根目录、用户主目录及其上级目录和系统目录不会被静默运行。默认使用当前目录，也可传 `--workspace`。
 - **`/undo` 不是 Git 级回滚**：只跟踪 `write_file` / `edit_file`，不能保证撤销 `run_command` 的文件副作用，也不会重写暂存区或提交历史。
 - **会话记录包含上下文**：JSONL 可能保留模型读取过的代码及工具输出，不应把本地会话文件当作可以直接公开的日志。
 - **模型适配范围有限**：当前主要验证 OpenAI-compatible Chat Completions 与 DeepSeek thinking disabled；未实现所有 Provider 的专有协议与 reasoning 透传。

@@ -17,7 +17,7 @@ export const CONFIG_USAGE = `config 子命令：
   ts-coding-agent config path                 显示设置文件的路径
 
 设置项：ui（tui / plain）、sandbox（host / codex / mxc）、
-        nonGitDirectory（ask / init / allow；目前只保存，不影响运行）
+        nonGitDirectory（ask / init / allow；工作区不在 Git 仓库里时怎么处理）
 如果任务本身就叫 "config"，用 -- 隔开：ts-coding-agent -- config`;
 
 

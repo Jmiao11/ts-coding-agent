@@ -7,6 +7,7 @@ import {
 
 import {
   existsSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 
@@ -64,6 +65,12 @@ import {
   parseConfigCommand,
   type ConfigCommand,
 } from "./config/config-command.js";
+
+import {
+  currentPathRules,
+  decideNonGitWorkspace,
+  protectedDirectoryReason,
+} from "./config/non-git-workspace.js";
 
 import {
   SETTING_CHOICES,
@@ -211,13 +218,14 @@ const HELP = `用法：
   ts-coding-agent [选项]              交互模式：连续输入多个任务（需要交互式终端）
   ts-coding-agent config <子命令>     查看或修改默认设置
 
-在 Git 仓库里运行 coding agent。改动不会自动提交，请用 git diff 审查。
+在项目目录里运行 coding agent。工作区不在 Git 仓库里时，按 nonGitDirectory 设置处理；
+改动不会自动提交，请用 git diff 审查。
 
 选项：
   -c, --continue          继续这个 workspace 最近的会话
   -r, --resume            从这个 workspace 的会话列表里选一个继续
       --session <id>      按 id 前缀继续指定的会话（-r 列表里显示的 8 位）
-  -w, --workspace <dir>   工作目录（默认：当前目录；必须在 Git 仓库里）
+  -w, --workspace <dir>   工作目录（默认：当前目录）
   -m, --model <id>        模型 ID（默认：AGENT_MODEL）
       --env-file <path>   API 配置文件（默认：${DEFAULT_ENV_FILE}）
       --context-window <n>  工作预算，超过就压缩（默认 128000，不是模型上限；调小可用来测试压缩）
@@ -301,8 +309,6 @@ function printSettingsList(
       `${key.padEnd(width)}  ${settings[key].padEnd(8)}  （来源：${source}；可选：${SETTING_CHOICES[key].join(" / ")}）`,
     );
   }
-
-  console.log("\nnonGitDirectory 目前只保存和显示，暂不影响运行。");
 }
 
 
@@ -574,7 +580,7 @@ const compactionSettings = {
 };
 
 
-// ---------- Workspace：必须在 Git 仓库里 ----------
+// ---------- Workspace：Git 仓库，或按设置处理非 Git 目录 ----------
 
 const workspaceRoot = resolve(
   values.workspace ?? process.cwd(),
@@ -596,17 +602,37 @@ const gitStatus = spawnSync(
   },
 );
 
-if (gitStatus.error || gitStatus.status !== 0) {
-  fail(
-    `${workspaceRoot} 不在 Git 仓库里（或没有安装 git）。\n`
-    + "Agent 只在 Git 仓库里运行，这样改动才能用 git diff 审查、用 git restore 回滚。",
-  );
-}
+let gitInstalled = true;
+let inGitRepo = false;
+let hasUncommittedChanges = false;
 
-if (gitStatus.stdout.trim().length > 0) {
-  console.warn(
-    "⚠ 工作区有未提交的改动，建议先 commit，方便单独审查和回滚 Agent 的改动。\n",
-  );
+if (gitStatus.error) {
+  const code = (gitStatus.error as NodeJS.ErrnoException).code;
+
+  if (code === "ENOENT") {
+    // git 没装：当作非 Git 工作区，由 nonGitDirectory 决定怎么办
+    gitInstalled = false;
+  } else {
+    fail(
+      `无法运行 git status 检查工作区：${gitStatus.error.message}\n`
+      + (gitStatus.stderr?.trim() ? `git stderr：${gitStatus.stderr.trim()}` : ""),
+    );
+  }
+} else if (gitStatus.status === 0) {
+  inGitRepo = true;
+  hasUncommittedChanges = gitStatus.stdout.trim().length > 0;
+} else {
+  const stderr = gitStatus.stderr ?? "";
+
+  if (stderr.toLowerCase().includes("not a git repository")) {
+    // 普通项目目录：等 view 创建后再询问 / 自动初始化 / 直接运行
+  } else {
+    // 比如 dubious ownership：它其实在仓库里，不能问用户要不要 git init
+    fail(
+      `无法确认 ${workspaceRoot} 是不是 Git 仓库（git status 退出码 ${gitStatus.status}）。\n`
+      + `git stderr：${stderr.trim() || "(空)"}`,
+    );
+  }
 }
 
 // ---------- 命令在哪里执行：本机或 Codex 沙箱 ----------
@@ -728,6 +754,187 @@ const view = uiChoice.ui === "tui"
 for (const warning of settingsWarnings) {
   view.warn(`⚠ ${warning}`);
 }
+
+if (inGitRepo && hasUncommittedChanges) {
+  view.warn(
+    "⚠ 工作区有未提交的改动，建议先 commit，方便单独审查和回滚 Agent 的改动。",
+  );
+}
+
+// ---------- 不在 Git 仓库里：ask / init / allow ----------
+// 放到 view 创建之后：询问和输出都走 view，普通终端和 TUI 都能用。
+
+const NON_GIT_WARNING =
+  "⚠ 不在 Git 仓库里运行：改动没法用 git diff 审查；/undo 只能撤销 write_file / edit_file 的改动，run_command 的改动无法回滚。";
+
+
+function exitFromNonGitPrompt(): never {
+  view.info("已退出。");
+  view.close();
+  process.exit(0);
+}
+
+
+function runGitInit(): void {
+  const result = spawnSync(
+    "git",
+    ["init"],
+    {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+    },
+  );
+
+  const stdout = (result.stdout ?? "").trim();
+  const stderr = (result.stderr ?? "").trim();
+
+  if (result.error || result.status !== 0) {
+    fail(
+      `git init 失败：${result.error?.message ?? `退出码 ${result.status}`}`
+      + (stderr ? `\n${stderr}` : ""),
+    );
+  }
+
+  if (stdout) view.info(stdout);
+  if (stderr) view.warn(stderr);
+
+  view.info("已初始化 Git 仓库（没有自动 commit）。");
+  inGitRepo = true;
+}
+
+
+async function askSaveNonGitPolicy(
+  policy: "init" | "allow",
+): Promise<void> {
+  const answer = await view.readLine("以后都这样处理吗？[y/N] ");
+
+  if (answer === null) {
+    exitFromNonGitPrompt();
+  }
+
+  if (answer.trim().toLowerCase() !== "y") {
+    return;
+  }
+
+  try {
+    saveSetting(SETTINGS_PATH, "nonGitDirectory", policy);
+    view.info(`已保存 nonGitDirectory = ${policy}。`);
+  } catch (error) {
+    view.warn(
+      `⚠ 保存设置失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+
+async function askNonGitAction(
+  canInit: boolean,
+  protectedReason: string | undefined,
+): Promise<void> {
+  const lines = ["", "工作区不在 Git 仓库里。"];
+
+  if (protectedReason !== undefined) {
+    lines.push(`这个目录受保护：这是${protectedReason}，不能运行 git init。`);
+  } else if (!canInit) {
+    lines.push("没有找到 git，不能运行 git init。");
+  }
+
+  if (canInit) {
+    lines.push("  1) 在这里运行 git init（推荐）");
+  }
+
+  lines.push("  2) 不用 Git，直接运行");
+  lines.push("  3) 退出");
+  view.info(lines.join("\n"));
+
+  while (true) {
+    const answer = await view.readLine("> ");
+
+    if (answer === null) {
+      exitFromNonGitPrompt();
+    }
+
+    const choice = answer.trim();
+
+    if (canInit && choice === "1") {
+      runGitInit();
+      await askSaveNonGitPolicy("init");
+      return;
+    }
+
+    if (choice === "2") {
+      // 受保护的目录不能把「不用 Git」保存成默认设置
+      if (protectedReason === undefined) {
+        await askSaveNonGitPolicy("allow");
+      }
+
+      view.warn(NON_GIT_WARNING);
+      return;
+    }
+
+    if (choice === "3") {
+      exitFromNonGitPrompt();
+    }
+
+    view.warn(canInit ? "请输入 1、2 或 3。" : "请输入 2 或 3。");
+  }
+}
+
+
+async function handleNonGitWorkspace(): Promise<void> {
+  // 8.3 短路径和符号链接要先展开，否则受保护目录的判断会被绕过
+  let realWorkspaceRoot: string;
+
+  try {
+    realWorkspaceRoot = realpathSync.native(workspaceRoot);
+  } catch (error) {
+    fail(
+      `无法解析工作区路径 ${workspaceRoot}：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  let realHome: string;
+
+  try {
+    realHome = realpathSync.native(homedir());
+  } catch {
+    realHome = homedir();
+  }
+
+  const protectedReason = protectedDirectoryReason(
+    realWorkspaceRoot,
+    currentPathRules(process.env, realHome),
+  );
+
+  const decision = decideNonGitWorkspace({
+    policy: settings.nonGitDirectory,
+    interactive,
+    gitInstalled,
+    protectedReason,
+  });
+
+  switch (decision.action) {
+    case "init":
+      runGitInit();
+      return;
+
+    case "allow":
+      view.warn(NON_GIT_WARNING);
+      return;
+
+    case "ask":
+      await askNonGitAction(decision.canInit, protectedReason);
+      return;
+
+    case "refuse":
+      fail(decision.reason);
+  }
+}
+
+if (!inGitRepo) {
+  await handleNonGitWorkspace();
+}
+
 
 // ---------- MCP：项目配置先确认，连接失败只少一些工具，不会降低安全性 ----------
 const mcpConnections: McpConnection[] = [];
@@ -1323,7 +1530,12 @@ const agent = new Agent({
     messages: restored?.messages ?? [],
 
     systemPrompt:
-      createCodingSystemPrompt(workspaceRoot, { sandbox, skills: skillCatalog.skills, mcpTools: mcpTools.length > 0 }),
+      createCodingSystemPrompt(workspaceRoot, {
+        sandbox,
+        skills: skillCatalog.skills,
+        mcpTools: mcpTools.length > 0,
+        nonGitRepository: !inGitRepo,
+      }),
 
     tools: [
       createListDirectoryTool(workspaceRoot),
@@ -1982,7 +2194,9 @@ if (existsSync(active.writer.path)) {
 }
 
 view.info(
-  "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。",
+  inGitRepo
+    ? "\n请检查改动：git diff；满意再 commit，不满意用 git restore . 回滚。"
+    : "\n不在 Git 仓库里：用 /undo 撤销文件工具的改动",
 );
 
 // TUI 要把终端恢复原样（普通终端什么都不做）

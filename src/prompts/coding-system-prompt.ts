@@ -11,6 +11,9 @@ export type CodingSystemPromptOptions = {
   skills?: SkillEntry[];
 
   mcpTools?: boolean;
+
+  /** 工作区不是 Git 仓库：不能依赖 git diff 审查，提示词要换成对应的说明 */
+  nonGitRepository?: boolean;
 };
 
 
@@ -68,8 +71,10 @@ export function createCodingSystemPrompt(
     // 观察（README 任务）：读取了 .env
     "- Never read or print secret files such as .env. If you need a value from one, ask the user.",
 
-   // 预防（真实项目）：改动由用户用 git diff 审查
-   "- Do not run git commands that change history, branches or remotes (commit, push, reset, checkout, rebase, clean). The user reviews your changes with git diff.",
+   // 预防（真实项目）：改动由用户用 git diff 审查；非 Git 工作区没有这个退路
+   options.nonGitRepository
+     ? "- This workspace is not a Git repository, so your changes cannot be reviewed or reverted with git. Make minimal changes and say clearly which files you changed."
+     : "- Do not run git commands that change history, branches or remotes (commit, push, reset, checkout, rebase, clean). The user reviews your changes with git diff.",
           ...skillNotes(options.skills),
 
   ].join("\n");
