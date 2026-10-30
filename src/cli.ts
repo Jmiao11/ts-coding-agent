@@ -83,6 +83,12 @@ import {
 } from "./config/settings.js";
 
 import {
+  createReadlineSetupIO,
+  detectAvailableSandboxes,
+  runSetupWizard,
+} from "./config/setup-wizard.js";
+
+import {
   createCompactor,
   type CompactionCheckpoint,
   type Compactor,
@@ -216,6 +222,7 @@ const SETTINGS_DISPLAY_PATH =
 const HELP = `用法：
   ts-coding-agent [选项] "任务描述"   运行一个任务后退出
   ts-coding-agent [选项]              交互模式：连续输入多个任务（需要交互式终端）
+  ts-coding-agent setup               首次运行设置（需要交互式终端）
   ts-coding-agent config <子命令>     查看或修改默认设置
 
 在项目目录里运行 coding agent。工作区不在 Git 仓库里时，按 nonGitDirectory 设置处理；
@@ -243,6 +250,10 @@ const HELP = `用法：
   默认值来自 ${SETTINGS_DISPLAY_PATH}；命令行参数优先。
   ${CONFIG_USAGE}
 
+首次运行：
+  交互模式下缺少 AGENT_API_KEY / AGENT_BASE_URL / AGENT_MODEL 时会询问是否设置；
+  也可以随时运行 ts-coding-agent setup。Key 只写入 env 文件，不会显示。
+
 需要的配置（环境变量，或写在 env 文件里）：
   AGENT_API_KEY  AGENT_BASE_URL  AGENT_MODEL
   可选：AGENT_THINKING=enabled 或 disabled（DeepSeek：显式开启或关闭 thinking）
@@ -264,13 +275,15 @@ function fail(
 
 // ---------- config 子命令 ----------
 
-/** 第一个位置参数是 config，且它前面没有 "--" */
-function isConfigSubcommand(): boolean {
+/** 第一个位置参数是 name，且它前面没有 "--" */
+function isSubcommand(
+  name: string,
+): boolean {
   const first = args.tokens.find(
     (token) => token.kind === "positional",
   );
 
-  if (first?.kind !== "positional" || first.value !== "config") {
+  if (first?.kind !== "positional" || first.value !== name) {
     return false;
   }
 
@@ -279,6 +292,85 @@ function isConfigSubcommand(): boolean {
   return !args.tokens
     .slice(0, index)
     .some((token) => token.kind === "option-terminator");
+}
+
+
+function currentSetupEnv(): {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+} {
+  return {
+    ...(process.env.AGENT_API_KEY ? { apiKey: process.env.AGENT_API_KEY } : {}),
+    ...(process.env.AGENT_BASE_URL ? { baseUrl: process.env.AGENT_BASE_URL } : {}),
+    ...(process.env.AGENT_MODEL ? { model: process.env.AGENT_MODEL } : {}),
+  };
+}
+
+
+/** 设置文件读不了也继续：引导本身仍然可以写 env，config 改不了时给出警告 */
+function loadSettingsForSetup(): Settings {
+  try {
+    const loaded = loadSettings(SETTINGS_PATH);
+
+    for (const warning of loaded.warnings) {
+      console.warn(`⚠ ${warning}`);
+    }
+
+    return resolveSettings(loaded.settings);
+  } catch (error) {
+    console.warn(
+      `⚠ 无法读取设置文件 ${SETTINGS_PATH}：${error instanceof Error ? error.message : String(error)}，使用默认值`,
+    );
+
+    return resolveSettings();
+  }
+}
+
+
+/** setup 子命令：不加载模型配置，也不要求 Git 仓库 */
+async function runSetupSubcommand(
+  argv: readonly string[],
+): Promise<never> {
+  if (argv.length > 0) {
+    fail("setup 不接受位置参数。");
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    fail("setup 需要在交互式终端里运行（stdin 和 stdout 都必须是 TTY）。");
+  }
+
+  const envFile =
+    values["env-file"] ?? DEFAULT_ENV_FILE;
+
+  if (existsSync(envFile)) {
+    try {
+      process.loadEnvFile(envFile);
+    } catch (error) {
+      fail(
+        `无法读取 env 文件 ${envFile}：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const result = await runSetupWizard({
+    envFile,
+    settingsPath: SETTINGS_PATH,
+    settings: loadSettingsForSetup(),
+    currentEnv: currentSetupEnv(),
+    io: createReadlineSetupIO(),
+    availableSandboxes: await detectAvailableSandboxes(),
+  });
+
+  if (result.status === "saved") {
+    process.exit(0);
+  }
+
+  if (result.status === "cancelled") {
+    console.log("已取消。");
+  }
+
+  process.exit(1);
 }
 
 
@@ -418,10 +510,14 @@ if (values.help) {
   process.exit(0);
 }
 
-// config 子命令不加载模型配置，也不要求当前目录是 Git 仓库。
-// 第一个位置参数是 config、且没有被 "--" 隔开时才进入；
+// setup / config 子命令不加载模型配置，也不要求当前目录是 Git 仓库。
+// 第一个位置参数匹配、且没有被 "--" 隔开时才进入；
 // `ts-coding-agent -- config` 仍然是把 "config" 当作任务描述。
-if (isConfigSubcommand()) {
+if (isSubcommand("setup")) {
+  await runSetupSubcommand(positionals.slice(1));
+}
+
+if (isSubcommand("config")) {
   runConfigSubcommand(positionals.slice(1));
 }
 
@@ -489,30 +585,7 @@ if (values.tui) {
 }
 
 // 命令行 > 设置文件 > 默认值
-const settings = resolveSettings(fileSettings, cliSettings);
-
-/** 当前沙箱值是不是从设置文件来的（没有在命令行里写 --sandbox） */
-const sandboxFromConfig =
-  values.sandbox === undefined
-  && fileSettings.sandbox !== undefined;
-
-const configSandboxHint = sandboxFromConfig
-  ? `\n这个沙箱来自 ${SETTINGS_DISPLAY_PATH}；临时改用本机执行：--sandbox host。`
-  : "";
-
-// 界面选择只依赖设置、参数和 TTY，提前在这里校验 --plain / --tui 的冲突
-const uiChoice = chooseUi({
-  settings,
-  tui: values.tui === true,
-  plain: values.plain === true,
-  interactive,
-  stdinIsTTY: Boolean(process.stdin.isTTY),
-  stdoutIsTTY: Boolean(process.stdout.isTTY),
-});
-
-if ("error" in uiChoice) {
-  fail(uiChoice.error);
-}
+let settings = resolveSettings(fileSettings, cliSettings);
 
 
 // ---------- 配置 ----------
@@ -526,6 +599,99 @@ if (existsSync(envFile)) {
 } else if (values["env-file"] !== undefined) {
   fail(`找不到 env 文件：${envFile}`);
 }
+
+// 交互模式第一次运行：读完 env 文件后仍缺模型配置，就在 TUI 启动前问一次
+const missingModelConfig = [
+  !process.env.AGENT_API_KEY,
+  !process.env.AGENT_BASE_URL,
+  !process.env.AGENT_MODEL && values.model === undefined,
+].some(Boolean);
+
+if (
+  interactive
+  && process.stdin.isTTY
+  && process.stdout.isTTY
+  && missingModelConfig
+) {
+  const setupIO = createReadlineSetupIO();
+  let wantsSetup = false;
+
+  while (true) {
+    const answer = await setupIO.ask("还没有配置模型，现在设置吗？[Y/n] ");
+
+    if (answer === null) {
+      break;
+    }
+
+    const choice = answer.trim().toLowerCase();
+
+    if (choice === "" || choice === "y" || choice === "yes") {
+      wantsSetup = true;
+      break;
+    }
+
+    if (choice === "n" || choice === "no") {
+      break;
+    }
+
+    setupIO.write("请输入 y 或 n。\n");
+  }
+
+  if (wantsSetup) {
+    const result = await runSetupWizard({
+      envFile,
+      settingsPath: SETTINGS_PATH,
+      settings: resolveSettings(fileSettings),
+      currentEnv: currentSetupEnv(),
+      io: setupIO,
+      availableSandboxes: await detectAvailableSandboxes(),
+    });
+
+    if (result.status === "saved") {
+      process.env.AGENT_API_KEY = result.env.apiKey;
+      process.env.AGENT_BASE_URL = result.env.baseUrl;
+      process.env.AGENT_MODEL = result.env.model;
+
+      // 引导可能改了 config.json：重新读取，让这次启动也用上新值；命令行参数仍然优先
+      try {
+        const reloaded = loadSettings(SETTINGS_PATH);
+
+        fileSettings = reloaded.settings;
+        settings = resolveSettings(fileSettings, cliSettings);
+        settingsWarnings.length = 0;
+        settingsWarnings.push(...reloaded.warnings);
+      } catch (error) {
+        settingsWarnings.push(
+          `无法重新读取设置文件 ${SETTINGS_PATH}：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+}
+
+/** 当前沙箱值是不是从设置文件来的（没有在命令行里写 --sandbox） */
+const sandboxFromConfig =
+  values.sandbox === undefined
+  && fileSettings.sandbox !== undefined;
+
+const configSandboxHint = sandboxFromConfig
+  ? `\n这个沙箱来自 ${SETTINGS_DISPLAY_PATH}；临时改用本机执行：--sandbox host。`
+  : "";
+
+// 界面选择只依赖设置、参数和 TTY
+const uiChoice = chooseUi({
+  settings,
+  tui: values.tui === true,
+  plain: values.plain === true,
+  interactive,
+  stdinIsTTY: Boolean(process.stdin.isTTY),
+  stdoutIsTTY: Boolean(process.stdout.isTTY),
+});
+
+if ("error" in uiChoice) {
+  fail(uiChoice.error);
+}
+
 
 function requiredEnv(
   name: string,
@@ -542,9 +708,12 @@ function requiredEnv(
   return value;
 }
 
-const apiKey = requiredEnv("AGENT_API_KEY");
-const baseUrl = requiredEnv("AGENT_BASE_URL");
-const modelId = values.model ?? requiredEnv("AGENT_MODEL");
+const SETUP_HINT =
+  "\n运行 ts-coding-agent setup 进行设置。";
+
+const apiKey = requiredEnv("AGENT_API_KEY", SETUP_HINT);
+const baseUrl = requiredEnv("AGENT_BASE_URL", SETUP_HINT);
+const modelId = values.model ?? requiredEnv("AGENT_MODEL", SETUP_HINT);
 
 // DeepSeek 的 thinking 开关。开启时思考过程存进消息的 thinking 块，之后每次请求原样回传。
 // 不设置就什么都不发，用 Provider 的默认值（其他 Provider 可能不认识这个字段）。
