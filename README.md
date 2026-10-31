@@ -153,7 +153,7 @@ flowchart TB
 
 ## 🚀 快速开始
 
-以下步骤以 Windows PowerShell、Node.js **24+** 为例。当前仓库的 `package.json` 仍为私有的 0.1.0；Beta 安装命令供发布后使用，现阶段可从源码运行。
+以下步骤以 Windows PowerShell、Node.js **24+** 为例。Beta 尚未发布到 npm；目前请从源码运行，或在本地打包后全局安装。
 
 ### 1. 从源码运行
 
@@ -167,18 +167,20 @@ pnpm build
 node dist/cli.js --help
 ```
 
-> 上面的 GitHub 地址将在仓库公开后可用。源码构建目前固定使用 pnpm 12.5.1。
+> 源码构建固定使用 pnpm 12.5.1。
 
-### 2. 从 npm 安装（Beta）
+### 2. 本地打包后全局安装
 
-Beta 发布后，在 Node.js 24 或更高版本上全局安装：
+npm 包尚未发布。可以在源码根目录打包，再到仓库目录之外安装（仓库的 `devEngines` 要求 pnpm，在仓库目录里运行 npm 可能被拒绝）：
 
 ```powershell
-npm i -g ts-coding-agent@beta
+pnpm pack          # 会先执行 clean + build，生成 ts-coding-agent-0.2.0-beta.0.tgz
+cd ..
+npm i -g .\ts-coding-agent\ts-coding-agent-0.2.0-beta.0.tgz
+ts-coding-agent --help
 ```
 
-使用 `--sandbox mxc` 时另装 SDK：`npm i -g @microsoft/mxc-sdk@1.0.0`。从源码运行时，`pnpm install --frozen-lockfile` 会安装该可选依赖。
-较新版本的 npm 默认不运行依赖的安装脚本；如果 `--sandbox mxc` 启动失败，可加上 `--allow-scripts=koffi,node-pty` 重新安装：`npm i -g ts-coding-agent@beta --allow-scripts=koffi,node-pty`。
+`@microsoft/mxc-sdk` 是可选依赖，会随包一起安装；它安装失败不会让整个安装失败，只是 `--sandbox mxc` 不可用。较新版本的 npm 默认不运行依赖的安装脚本；如果 `--sandbox mxc` 启动失败，可加上 `--allow-scripts=koffi,node-pty` 重新安装。
 
 ### 3. 配置自己的模型 API
 
@@ -261,7 +263,7 @@ Linux/macOS 同理：在目标项目目录里执行 `node /absolute/path/to/ts-c
 | `/undo` | 撤销最近一次符合条件的文件工具改动 |
 | `/exit` | 退出交互模式 |
 
-> `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。Beta 发布后，全局安装的命令名为 `ts-coding-agent`。
+> `node dist/cli.js` 是**从源码根目录**运行的命令；在其他目录启动时，请使用 CLI 入口的绝对路径。全局安装后（见「本地打包后全局安装」），命令名为 `ts-coding-agent`。
 
 设置文件是 `~/.agent-harness/config.json`（与 `mcp.json` 在同一目录），保存 `ui`、`sandbox`、`nonGitDirectory` 的默认值；命令行参数优先。`config set` 会先校验取值再保存。`nonGitDirectory` 决定工作区不是 Git 仓库时怎么处理，见[不在 Git 仓库里运行](#不在-git-仓库里运行)。任务本身名叫 `config` 时，用 `--` 隔开：`node dist/cli.js -- config`。
 
@@ -439,8 +441,8 @@ pnpm build
 
 | 阶段 | 方向 |
 | --- | --- |
-| 已完成 | v0.1.0 Preview 的源码运行、Agent Loop、工具、上下文压缩、Session、`/undo`；TUI、Skills、stdio MCP 接入与审批 |
-| 下一步：Beta 发布 | npm 包发布；检查可选依赖对安装体积的影响 |
+| 已完成 | v0.1.0 Preview 的源码运行、Agent Loop、工具、上下文压缩、Session、`/undo`；沙箱（codex / 实验性 mxc）、TUI、Skills、stdio MCP 接入与审批、首次运行设置 |
+| 下一步：Beta 发布 | GitHub Release 附带安装包；npm 账号可用后发布 npm beta |
 | 长期探索 | 对话分支恢复、更多模型接口与安全边界 |
 
 路线是计划，不代表已实现或承诺发布日期。
