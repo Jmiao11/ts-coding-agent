@@ -4,6 +4,9 @@
   "description": "A lightweight TypeScript coding agent runtime with tool calling, context compaction, persistent sessions, and file undo.",
   "author": "Jmiao11",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Jmiao11/ts-coding-agent.git" },
+  "homepage": "https://github.com/Jmiao11/ts-coding-agent#readme",
+  "bugs": { "url": "https://github.com/Jmiao11/ts-coding-agent/issues" },
   "keywords": [
     "coding-agent",
     "agent-runtime",
