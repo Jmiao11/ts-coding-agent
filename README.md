@@ -10,7 +10,7 @@
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-24%2B-5FA04E?logo=nodedotjs&logoColor=white)
-![Status](https://img.shields.io/badge/Status-v0.1.0%20Preview-orange)
+![Status](https://img.shields.io/badge/Status-0.2.0--beta.0%20unreleased-orange)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 [为什么做这个项目](#-为什么做这个项目) · [功能演示](#-功能演示) · [系统架构](#-系统架构) · [快速开始](#-快速开始) · [测试与验证](#-测试与验证) · [已知限制](#️-范围与已知限制)
